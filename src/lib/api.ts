@@ -16,19 +16,22 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 // Fetch traffic data from the backend
 export const fetchTrafficData = async (): Promise<TrafficData[]> => {
   try {
+    console.log('Fetching traffic data from:', `${API_BASE_URL}/api/traffic`);
     const response = await fetch(`${API_BASE_URL}/api/traffic`);
     
     if (!response.ok) {
       throw new Error(`API error: ${response.status}`);
     }
     
-    return await response.json();
+    const data = await response.json();
+    console.log('Received traffic data:', data);
+    return data;
   } catch (error) {
     console.error("Error fetching traffic data:", error);
-    toast.error("Failed to fetch traffic data");
+    toast.error("Failed to fetch traffic data. Make sure the backend server is running.");
     
-    // Return mock data in case of error to prevent UI from breaking
-    return generateMockData();
+    // Return empty array instead of mock data
+    return [];
   }
 };
 
@@ -38,6 +41,7 @@ export const updateTrafficSignal = async (
   status: "red" | "yellow" | "green"
 ): Promise<void> => {
   try {
+    console.log(`Updating traffic signal at ${intersectionId} to ${status}`);
     const response = await fetch(`${API_BASE_URL}/api/traffic/signal`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -57,40 +61,6 @@ export const updateTrafficSignal = async (
     }
   } catch (error) {
     console.error("Error updating traffic signal:", error);
-    toast.error("Failed to update traffic signal");
+    toast.error("Failed to update traffic signal. Check backend connection.");
   }
-};
-
-// Generate mock data in case the backend is not available
-const generateMockData = (): TrafficData[] => {
-  return [
-    {
-      intersectionId: "int-001",
-      vehicleCount: Math.floor(Math.random() * 20) + 1,
-      hasEmergencyVehicle: Math.random() < 0.1,
-      timestamp: new Date().toISOString(),
-      status: "red",
-    },
-    {
-      intersectionId: "int-002",
-      vehicleCount: Math.floor(Math.random() * 20) + 1,
-      hasEmergencyVehicle: Math.random() < 0.1,
-      timestamp: new Date().toISOString(),
-      status: "green",
-    },
-    {
-      intersectionId: "int-003",
-      vehicleCount: Math.floor(Math.random() * 20) + 1,
-      hasEmergencyVehicle: Math.random() < 0.1,
-      timestamp: new Date().toISOString(),
-      status: "yellow",
-    },
-    {
-      intersectionId: "int-004",
-      vehicleCount: Math.floor(Math.random() * 20) + 1,
-      hasEmergencyVehicle: Math.random() < 0.1,
-      timestamp: new Date().toISOString(),
-      status: "green",
-    },
-  ];
 };
