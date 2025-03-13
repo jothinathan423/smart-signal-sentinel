@@ -1,45 +1,33 @@
 
 import { useState, useEffect } from "react";
-import { fetchTrafficData, TrafficData } from "@/lib/api";
+import { fetchTrafficData, updateTrafficSignal, TrafficData } from "@/lib/api";
 
-// Mock data for demonstration
-const mockIntersections = [
-  {
-    id: "int-001",
-    name: "Main St & 5th Ave",
-    vehicleCount: 12,
-    status: "red" as const,
-    emergency: false,
-    lastUpdated: new Date().toLocaleTimeString(),
-  },
-  {
-    id: "int-002",
-    name: "Broadway & 42nd St",
-    vehicleCount: 8,
-    status: "green" as const,
-    emergency: false,
-    lastUpdated: new Date().toLocaleTimeString(),
-  },
-  {
-    id: "int-003",
-    name: "Park Ave & 34th St",
-    vehicleCount: 15,
-    status: "yellow" as const,
-    emergency: true,
-    lastUpdated: new Date().toLocaleTimeString(),
-  },
-  {
-    id: "int-004",
-    name: "Lexington & 59th St",
-    vehicleCount: 5,
-    status: "green" as const,
-    emergency: false,
-    lastUpdated: new Date().toLocaleTimeString(),
-  },
-];
+// Define the intersection data structure
+export interface Intersection {
+  id: string;
+  name: string;
+  vehicleCount: number;
+  status: "red" | "yellow" | "green";
+  emergency: boolean;
+  lastUpdated: string;
+}
 
-// Generate mock history data
-const generateHistoryData = () => {
+// Define the history data point structure
+export interface HistoryDataPoint {
+  time: string;
+  count: number;
+}
+
+// Mapping of intersection IDs to names
+const intersectionNames: Record<string, string> = {
+  "int-001": "Main St & 5th Ave",
+  "int-002": "Broadway & 42nd St",
+  "int-003": "Park Ave & 34th St",
+  "int-004": "Lexington & 59th St",
+};
+
+// Generate initial history data
+const generateHistoryData = (): HistoryDataPoint[] => {
   const data = [];
   const now = new Date();
   
@@ -57,25 +45,26 @@ const generateHistoryData = () => {
 };
 
 export const useTrafficData = () => {
-  const [intersections, setIntersections] = useState(mockIntersections);
+  const [intersections, setIntersections] = useState<Intersection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [historyData, setHistoryData] = useState(generateHistoryData());
+  const [historyData, setHistoryData] = useState<HistoryDataPoint[]>(generateHistoryData());
 
-  // This simulates fetching data from the backend
+  // Fetch traffic data from the backend
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true);
-        // In a real app, this would call the API
-        // const data = await fetchTrafficData();
+        const data = await fetchTrafficData();
         
-        // For demo purposes, we'll use the mock data and add some randomness
-        const updatedIntersections = mockIntersections.map(intersection => ({
-          ...intersection,
-          vehicleCount: Math.floor(Math.random() * 20) + 1,
-          emergency: Math.random() < 0.1, // 10% chance of emergency
-          lastUpdated: new Date().toLocaleTimeString(),
+        // Map API data to intersection objects
+        const updatedIntersections = data.map(item => ({
+          id: item.intersectionId,
+          name: intersectionNames[item.intersectionId] || `Intersection ${item.intersectionId}`,
+          vehicleCount: item.vehicleCount,
+          status: item.status || "red",
+          emergency: item.hasEmergencyVehicle,
+          lastUpdated: new Date(item.timestamp).toLocaleTimeString(),
         }));
         
         setIntersections(updatedIntersections);
@@ -86,8 +75,7 @@ export const useTrafficData = () => {
             time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             count: updatedIntersections.reduce((sum, int) => sum + int.vehicleCount, 0),
           };
-          const updated = [...prev.slice(1), newPoint];
-          return updated;
+          return [...prev.slice(1), newPoint];
         });
         
         setError(null);
@@ -101,20 +89,28 @@ export const useTrafficData = () => {
 
     fetchData();
     
-    // Refresh data every 5 seconds
-    const interval = setInterval(fetchData, 5000);
+    // Refresh data every 3 seconds
+    const interval = setInterval(fetchData, 3000);
     
     return () => clearInterval(interval);
   }, []);
 
-  const updateTrafficStatus = (id: string, status: "red" | "yellow" | "green") => {
-    setIntersections(prev => 
-      prev.map(intersection => 
-        intersection.id === id 
-          ? { ...intersection, status, lastUpdated: new Date().toLocaleTimeString() } 
-          : intersection
-      )
-    );
+  // Update traffic signal status
+  const updateTrafficStatus = async (id: string, status: "red" | "yellow" | "green") => {
+    try {
+      await updateTrafficSignal(id, status);
+      
+      // Optimistically update the UI
+      setIntersections(prev => 
+        prev.map(intersection => 
+          intersection.id === id 
+            ? { ...intersection, status, lastUpdated: new Date().toLocaleTimeString() } 
+            : intersection
+        )
+      );
+    } catch (err) {
+      console.error("Failed to update traffic signal:", err);
+    }
   };
 
   return {
