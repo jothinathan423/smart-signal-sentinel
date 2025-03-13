@@ -1,24 +1,18 @@
 
-import React, { useState } from "react";
+import React from "react";
 import Navigation from "@/components/Navigation";
 import Intersection from "@/components/Intersection";
 import TrafficGraph from "@/components/TrafficGraph";
 import { useTrafficData } from "@/hooks/useTrafficData";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { RefreshCw, AlertTriangle } from "lucide-react";
 
 const Dashboard = () => {
   const { intersections, historyData, loading, error, updateTrafficStatus } = useTrafficData();
-  const [activeTab, setActiveTab] = useState("all");
-
-  const filteredIntersections = activeTab === "all" 
-    ? intersections 
-    : activeTab === "emergency" 
-      ? intersections.filter(i => i.emergency) 
-      : intersections;
-
-  const emergencyCount = intersections.filter(i => i.emergency).length;
+  
+  // Get the single intersection or null if none
+  const intersection = intersections.length > 0 ? intersections[0] : null;
+  const emergency = intersection?.emergency || false;
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -29,14 +23,14 @@ const Dashboard = () => {
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
               <h1 className="text-3xl font-bold tracking-tight">Traffic Dashboard</h1>
-              <p className="text-muted-foreground">Real-time traffic monitoring and control</p>
+              <p className="text-muted-foreground">Real-time traffic monitoring using laptop camera</p>
             </div>
             
             <div className="flex items-center gap-4">
-              {emergencyCount > 0 && (
+              {emergency && (
                 <div className="bg-traffic-emergency/10 text-traffic-emergency px-3 py-1.5 rounded-lg flex items-center gap-2 animate-emergency-pulse">
                   <AlertTriangle className="h-4 w-4" />
-                  <span className="font-medium">{emergencyCount} Emergency</span>
+                  <span className="font-medium">Emergency Vehicle Detected</span>
                 </div>
               )}
               <Button variant="outline" size="sm" onClick={() => window.location.reload()}>
@@ -52,55 +46,32 @@ const Dashboard = () => {
             </div>
           )}
 
+          {loading && !intersection && (
+            <div className="text-center py-8">
+              <div className="animate-spin h-8 w-8 mx-auto border-4 border-primary border-t-transparent rounded-full mb-4"></div>
+              <p className="text-muted-foreground">Connecting to camera and traffic data...</p>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
             <div className="lg:col-span-3 space-y-6">
-              <Tabs defaultValue="all" className="w-full" value={activeTab} onValueChange={setActiveTab}>
-                <TabsList>
-                  <TabsTrigger value="all">All Intersections</TabsTrigger>
-                  <TabsTrigger value="emergency" className="relative">
-                    Emergency
-                    {emergencyCount > 0 && (
-                      <span className="absolute -top-1 -right-1 bg-traffic-emergency text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">
-                        {emergencyCount}
-                      </span>
-                    )}
-                  </TabsTrigger>
-                </TabsList>
-                <TabsContent value="all" className="space-y-4 mt-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {filteredIntersections.map((intersection) => (
-                      <Intersection
-                        key={intersection.id}
-                        {...intersection}
-                        onStatusChange={updateTrafficStatus}
-                      />
-                    ))}
+              {intersection ? (
+                <Intersection
+                  key={intersection.id}
+                  {...intersection}
+                  onStatusChange={updateTrafficStatus}
+                />
+              ) : !loading ? (
+                <div className="flex flex-col items-center justify-center py-12 bg-muted/20 rounded-xl">
+                  <div className="bg-muted p-4 rounded-full mb-4">
+                    <AlertTriangle className="h-6 w-6 text-muted-foreground" />
                   </div>
-                </TabsContent>
-                <TabsContent value="emergency" className="space-y-4 mt-4">
-                  {filteredIntersections.length > 0 ? (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {filteredIntersections.map((intersection) => (
-                        <Intersection
-                          key={intersection.id}
-                          {...intersection}
-                          onStatusChange={updateTrafficStatus}
-                        />
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="flex flex-col items-center justify-center py-12">
-                      <div className="bg-muted p-4 rounded-full mb-4">
-                        <AlertTriangle className="h-6 w-6 text-muted-foreground" />
-                      </div>
-                      <h3 className="text-lg font-medium">No Emergency Vehicles</h3>
-                      <p className="text-muted-foreground text-center max-w-md mt-2">
-                        There are currently no emergency vehicles detected at any monitored intersections.
-                      </p>
-                    </div>
-                  )}
-                </TabsContent>
-              </Tabs>
+                  <h3 className="text-lg font-medium">No Traffic Data</h3>
+                  <p className="text-muted-foreground text-center max-w-md mt-2">
+                    There is no traffic data available. Please ensure the backend server is running and your laptop camera is accessible.
+                  </p>
+                </div>
+              ) : null}
             </div>
             
             <div className="lg:col-span-1 space-y-6">
@@ -112,23 +83,23 @@ const Dashboard = () => {
                 </div>
                 <div className="space-y-2">
                   <div className="flex justify-between items-center">
-                    <span className="text-sm">Monitored Intersections</span>
-                    <span className="font-mono">{intersections.length}</span>
+                    <span className="text-sm">Traffic Signal</span>
+                    <span className="font-mono">{intersection?.status || "N/A"}</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-sm">Emergency Vehicles</span>
-                    <span className="font-mono">{emergencyCount}</span>
+                    <span className="text-sm">Emergency Vehicle</span>
+                    <span className="font-mono">{intersection?.emergency ? "Detected" : "None"}</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-sm">Total Vehicles</span>
+                    <span className="text-sm">Vehicle Count</span>
                     <span className="font-mono">
-                      {intersections.reduce((sum, i) => sum + i.vehicleCount, 0)}
+                      {intersection?.vehicleCount || 0}
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-sm">Last Update</span>
                     <span className="font-mono text-xs">
-                      {new Date().toLocaleTimeString()}
+                      {intersection?.lastUpdated || new Date().toLocaleTimeString()}
                     </span>
                   </div>
                 </div>

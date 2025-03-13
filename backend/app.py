@@ -14,17 +14,11 @@ CORS(app)  # Enable CORS for all routes
 # Store the latest traffic data
 traffic_data = {
     "int-001": {"vehicleCount": 0, "hasEmergencyVehicle": False, "timestamp": ""},
-    "int-002": {"vehicleCount": 0, "hasEmergencyVehicle": False, "timestamp": ""},
-    "int-003": {"vehicleCount": 0, "hasEmergencyVehicle": False, "timestamp": ""},
-    "int-004": {"vehicleCount": 0, "hasEmergencyVehicle": False, "timestamp": ""},
 }
 
 # Traffic signal status
 traffic_signals = {
     "int-001": "red",
-    "int-002": "red",
-    "int-003": "red",
-    "int-004": "red",
 }
 
 # Configuration for emergency vehicle detection
@@ -40,7 +34,7 @@ def detect_vehicles(video_source, intersection_id):
     """
     Process video feed to count vehicles and detect emergency vehicles
     """
-    print(f"Starting vehicle detection for intersection {intersection_id} using source {video_source}")
+    print(f"Starting vehicle detection for intersection {intersection_id} using laptop camera")
     
     # Load pre-trained vehicle detection model (using YOLO)
     try:
@@ -81,8 +75,8 @@ def detect_vehicles(video_source, intersection_id):
     
     while cap is None or not cap.isOpened():
         try:
-            print(f"Attempt {retry_count + 1}/{max_retries} to connect to camera {video_source}")
-            cap = cv2.VideoCapture(video_source)
+            print(f"Attempt {retry_count + 1}/{max_retries} to connect to laptop camera")
+            cap = cv2.VideoCapture(0)  # Use laptop camera (index 0)
             
             # Set camera resolution to improve performance
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
@@ -93,11 +87,11 @@ def detect_vehicles(video_source, intersection_id):
                 time.sleep(1)
                 retry_count += 1
                 if retry_count >= max_retries:
-                    print(f"Could not open camera after {max_retries} attempts")
-                    raise IOError(f"Could not open camera source {video_source}")
+                    print(f"Could not open laptop camera after {max_retries} attempts")
+                    raise IOError(f"Could not open laptop camera")
                 continue
             
-            print(f"Successfully connected to camera for {intersection_id}")
+            print(f"Successfully connected to laptop camera for {intersection_id}")
             # Read a test frame to verify camera is working
             ret, test_frame = cap.read()
             if not ret or test_frame is None:
@@ -109,27 +103,27 @@ def detect_vehicles(video_source, intersection_id):
                 continue
                 
         except Exception as e:
-            print(f"Error connecting to camera: {e}")
+            print(f"Error connecting to laptop camera: {e}")
             retry_count += 1
             time.sleep(1)
             if retry_count >= max_retries:
-                print(f"Giving up on camera {video_source} after {max_retries} attempts")
+                print(f"Giving up on laptop camera after {max_retries} attempts")
                 # Update traffic data to indicate camera failure
                 with data_lock:
                     traffic_data[intersection_id] = {
                         "vehicleCount": 0,
                         "hasEmergencyVehicle": False,
                         "timestamp": datetime.now().isoformat(),
-                        "error": f"Failed to connect to camera: {str(e)}"
+                        "error": f"Failed to connect to laptop camera: {str(e)}"
                     }
                 # Keep trying periodically
                 while True:
                     time.sleep(10)
                     try:
-                        print(f"Periodic retry: Attempting to connect to camera {video_source}")
-                        cap = cv2.VideoCapture(video_source)
+                        print(f"Periodic retry: Attempting to connect to laptop camera")
+                        cap = cv2.VideoCapture(0)
                         if cap.isOpened():
-                            print(f"Successfully reconnected to camera {video_source}")
+                            print(f"Successfully reconnected to laptop camera")
                             break
                         cap.release()
                     except Exception as retry_e:
@@ -147,12 +141,12 @@ def detect_vehicles(video_source, intersection_id):
             ret, frame = cap.read()
             
             if not ret or frame is None:
-                print(f"Error reading frame from {video_source}. Reconnecting...")
+                print(f"Error reading frame from laptop camera. Reconnecting...")
                 cap.release()
                 time.sleep(1)
-                cap = cv2.VideoCapture(video_source)
+                cap = cv2.VideoCapture(0)
                 if not cap.isOpened():
-                    print(f"Failed to reconnect to camera {video_source}")
+                    print(f"Failed to reconnect to laptop camera")
                     time.sleep(5)  # Wait longer before retry
                 continue
             
@@ -302,30 +296,19 @@ if __name__ == '__main__':
         print("2. yolov4.weights: https://github.com/AlexeyAB/darknet/releases/download/darknet_yolo_v3_optimal/yolov4.weights")
         print("3. coco.names: https://raw.githubusercontent.com/AlexeyAB/darknet/master/data/coco.names")
     
-    # Define video sources for each intersection
-    # For laptop camera, use index 0 which is the default webcam
-    video_sources = {
-        "int-001": 0,  # Main camera (default webcam)
-        "int-002": 0,  # Using same camera for testing
-        "int-003": 0,  # Using same camera for testing
-        "int-004": 0,  # Using same camera for testing
-    }
+    # Define the single intersection with laptop camera
+    intersection_id = "int-001"
     
-    print("Starting traffic monitoring with laptop camera:")
-    for intersection, source in video_sources.items():
-        print(f"- {intersection}: Camera index {source}")
+    print("Starting traffic monitoring with laptop camera")
     
-    # Start video processing in background threads
-    threads = []
-    for intersection_id, source in video_sources.items():
-        thread = threading.Thread(
-            target=detect_vehicles, 
-            args=(source, intersection_id),
-            daemon=True
-        )
-        thread.start()
-        threads.append(thread)
-        print(f"Started detection thread for {intersection_id}")
+    # Start video processing in background thread
+    thread = threading.Thread(
+        target=detect_vehicles, 
+        args=(0, intersection_id),  # 0 is the index for laptop camera
+        daemon=True
+    )
+    thread.start()
+    print(f"Started detection thread for {intersection_id}")
     
     # Start the Flask app
     print("Starting Flask server on http://0.0.0.0:5000")

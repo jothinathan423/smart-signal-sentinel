@@ -18,13 +18,8 @@ export interface HistoryDataPoint {
   count: number;
 }
 
-// Mapping of intersection IDs to names
-const intersectionNames: Record<string, string> = {
-  "int-001": "Main St & 5th Ave",
-  "int-002": "Broadway & 42nd St",
-  "int-003": "Park Ave & 34th St",
-  "int-004": "Lexington & 59th St",
-};
+// Single intersection name
+const intersectionName = "Main Street Intersection";
 
 // Generate initial history data
 const generateHistoryData = (): HistoryDataPoint[] => {
@@ -57,14 +52,14 @@ export const useTrafficData = () => {
         setLoading(true);
         const data = await fetchTrafficData();
         
-        // Map API data to intersection objects
+        // Map API data to intersection objects - expect only one result
         const updatedIntersections = data.map(item => ({
           id: item.intersectionId,
-          name: intersectionNames[item.intersectionId] || `Intersection ${item.intersectionId}`,
+          name: intersectionName,
           vehicleCount: item.vehicleCount,
           status: item.status || "red",
           emergency: item.hasEmergencyVehicle,
-          lastUpdated: new Date(item.timestamp).toLocaleTimeString(),
+          lastUpdated: item.timestamp ? new Date(item.timestamp).toLocaleTimeString() : 'N/A',
         }));
         
         setIntersections(updatedIntersections);
@@ -81,7 +76,7 @@ export const useTrafficData = () => {
         setError(null);
       } catch (err) {
         console.error("Failed to fetch traffic data:", err);
-        setError("Failed to fetch traffic data. Please try again.");
+        setError("Failed to fetch traffic data. Please ensure the backend server is running.");
       } finally {
         setLoading(false);
       }
