@@ -74,40 +74,79 @@ def detect_vehicles(video_source, intersection_id):
         print(f"Cannot proceed without object detection model")
         raise
     
-    # Initialize video capture - retry up to 3 times if it fails
-    camera_opened = False
+    # Initialize video capture with explicit retry logic
+    cap = None
+    max_retries = 5
     retry_count = 0
-    max_retries = 3
     
-    while not camera_opened and retry_count < max_retries:
+    while cap is None or not cap.isOpened():
         try:
-            print(f"Attempt {retry_count + 1}/{max_retries} to connect to camera source {video_source}")
+            print(f"Attempt {retry_count + 1}/{max_retries} to connect to camera {video_source}")
             cap = cv2.VideoCapture(video_source)
             
+            # Set camera resolution to improve performance
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            
             if not cap.isOpened():
-                print(f"Failed to open camera. Retrying in 2 seconds...")
-                time.sleep(2)
+                print(f"Failed to open camera. Retrying...")
+                time.sleep(1)
                 retry_count += 1
-                if retry_count == max_retries:
+                if retry_count >= max_retries:
                     print(f"Could not open camera after {max_retries} attempts")
                     raise IOError(f"Could not open camera source {video_source}")
-            else:
-                camera_opened = True
-                print(f"Successfully connected to camera for {intersection_id}")
+                continue
+            
+            print(f"Successfully connected to camera for {intersection_id}")
+            # Read a test frame to verify camera is working
+            ret, test_frame = cap.read()
+            if not ret or test_frame is None:
+                print("Camera opened but could not read frame. Retrying...")
+                cap.release()
+                cap = None
+                retry_count += 1
+                time.sleep(1)
+                continue
+                
         except Exception as e:
             print(f"Error connecting to camera: {e}")
             retry_count += 1
-            time.sleep(2)
-            if retry_count == max_retries:
-                raise IOError(f"Failed to connect to camera: {e}")
+            time.sleep(1)
+            if retry_count >= max_retries:
+                print(f"Giving up on camera {video_source} after {max_retries} attempts")
+                # Update traffic data to indicate camera failure
+                with data_lock:
+                    traffic_data[intersection_id] = {
+                        "vehicleCount": 0,
+                        "hasEmergencyVehicle": False,
+                        "timestamp": datetime.now().isoformat(),
+                        "error": f"Failed to connect to camera: {str(e)}"
+                    }
+                # Keep trying periodically
+                while True:
+                    time.sleep(10)
+                    try:
+                        print(f"Periodic retry: Attempting to connect to camera {video_source}")
+                        cap = cv2.VideoCapture(video_source)
+                        if cap.isOpened():
+                            print(f"Successfully reconnected to camera {video_source}")
+                            break
+                        cap.release()
+                    except Exception as retry_e:
+                        print(f"Periodic retry failed: {retry_e}")
     
     print(f"Starting main detection loop for {intersection_id}")
+    
     # Main processing loop
+    frame_count = 0
+    process_every_n_frames = 5  # Process every 5th frame to reduce CPU usage
+    
     while True:
-        # Real video processing mode
         try:
+            # Read a frame from the camera
             ret, frame = cap.read()
-            if not ret:
+            
+            if not ret or frame is None:
                 print(f"Error reading frame from {video_source}. Reconnecting...")
                 cap.release()
                 time.sleep(1)
@@ -115,6 +154,11 @@ def detect_vehicles(video_source, intersection_id):
                 if not cap.isOpened():
                     print(f"Failed to reconnect to camera {video_source}")
                     time.sleep(5)  # Wait longer before retry
+                continue
+            
+            # Only process every nth frame to improve performance
+            frame_count += 1
+            if frame_count % process_every_n_frames != 0:
                 continue
             
             # Preprocess the frame
@@ -176,18 +220,9 @@ def detect_vehicles(video_source, intersection_id):
                                     if red_percent > 5 or blue_percent > 5:
                                         has_emergency = True
                                         print(f"Emergency vehicle detected at {intersection_id}!")
-                        
-                        # Optional: Draw detection boxes on frame for monitoring
-                        # if classes[class_id] in ["car", "truck", "bus", "motorcycle", "ambulance"]:
-                        #     center_x = int(detection[0] * width)
-                        #     center_y = int(detection[1] * height)
-                        #     w = int(detection[2] * width)
-                        #     h = int(detection[3] * height)
-                        #     x = int(center_x - w / 2)
-                        #     y = int(center_y - h / 2)
-                        #     cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
             
-            # Optional: Display the processed frame with detections
+            # Optionally display the camera feed with bounding boxes (for testing)
+            # Uncomment this block if you want to see the video feed with detections
             # cv2.imshow(f"Traffic Camera - {intersection_id}", frame)
             # if cv2.waitKey(1) & 0xFF == ord('q'):
             #     break
@@ -205,30 +240,19 @@ def detect_vehicles(video_source, intersection_id):
                     "timestamp": datetime.now().isoformat()
                 }
             
-            # Print status update every 30 seconds
-            if int(time.time()) % 30 == 0:
+            # Print status update periodically
+            if frame_count % 100 == 0:
                 print(f"Intersection {intersection_id}: {vehicle_count} vehicles, Emergency: {has_emergency}")
                 
         except Exception as e:
             print(f"Error in video processing for {intersection_id}: {e}")
-            # Try to reconnect to the camera
-            try:
-                if 'cap' in locals() and cap is not None:
-                    cap.release()
-                time.sleep(3)
-                cap = cv2.VideoCapture(video_source)
-                if not cap.isOpened():
-                    print(f"Failed to reconnect to camera. Will retry...")
-                    time.sleep(5)
-            except Exception as reconnect_error:
-                print(f"Error reconnecting to camera: {reconnect_error}")
-                time.sleep(5)
+            time.sleep(1)
         
-        # Sleep briefly to reduce CPU usage
-        time.sleep(0.05)
+        # Small delay to reduce CPU usage
+        time.sleep(0.01)
     
-    # Cleanup
-    if 'cap' in locals() and cap is not None:
+    # Cleanup (this will only execute if we break the loop)
+    if cap is not None:
         cap.release()
     cv2.destroyAllWindows()
 
@@ -279,17 +303,17 @@ if __name__ == '__main__':
         print("3. coco.names: https://raw.githubusercontent.com/AlexeyAB/darknet/master/data/coco.names")
     
     # Define video sources for each intersection
-    # Use camera indexes (0, 1, 2...) or RTSP/IP camera URLs
+    # For laptop camera, use index 0 which is the default webcam
     video_sources = {
         "int-001": 0,  # Main camera (default webcam)
-        "int-002": 0,  # Using same camera for testing, replace with different cameras or sources
-        "int-003": 0,  # Using same camera for testing, replace with different cameras or sources 
-        "int-004": 0,  # Using same camera for testing, replace with different cameras or sources
+        "int-002": 0,  # Using same camera for testing
+        "int-003": 0,  # Using same camera for testing
+        "int-004": 0,  # Using same camera for testing
     }
     
-    print("Starting traffic monitoring with the following camera sources:")
+    print("Starting traffic monitoring with laptop camera:")
     for intersection, source in video_sources.items():
-        print(f"- {intersection}: {source}")
+        print(f"- {intersection}: Camera index {source}")
     
     # Start video processing in background threads
     threads = []

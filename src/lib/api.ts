@@ -29,8 +29,6 @@ export const fetchTrafficData = async (): Promise<TrafficData[]> => {
   } catch (error) {
     console.error("Error fetching traffic data:", error);
     toast.error("Failed to fetch traffic data. Make sure the backend server is running.");
-    
-    // Return empty array instead of mock data
     return [];
   }
 };
