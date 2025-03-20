@@ -31,13 +31,23 @@ emergency_config = {
 data_lock = threading.Lock()
 # Latest frame for video streaming
 latest_frame = None
+processed_frame = None  # Store the processed frame separately
 frame_lock = threading.Lock()
+
+# Frame processing configuration
+frame_processing = {
+    "skip_frames": 5,  # Process only every Nth frame
+    "last_full_process_time": 0,
+    "frame_quality": 70,  # JPEG quality for streaming (0-100)
+    "max_width": 640,  # Maximum width for streaming
+    "stream_fps": 15  # Target FPS for streaming
+}
 
 def detect_vehicles(video_source, intersection_id):
     """
     Process video feed to count vehicles and detect emergency vehicles
     """
-    global latest_frame
+    global latest_frame, processed_frame
     print(f"Starting vehicle detection for intersection {intersection_id} using laptop camera")
     
     # Load pre-trained vehicle detection model (using YOLO)
@@ -58,9 +68,20 @@ def detect_vehicles(video_source, intersection_id):
         with open(classes_path, "r") as f:
             classes = [line.strip() for line in f.readlines()]
         
-        # Configure the network
-        net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-        net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+        # Configure the network to use available hardware acceleration
+        net.setPreferableBackend(cv2.dnn.DNN_BACKEND_DEFAULT)
+        try:
+            # Try to use OpenCL acceleration if available
+            if cv2.ocl.haveOpenCL():
+                cv2.ocl.setUseOpenCL(True)
+                net.setPreferableTarget(cv2.dnn.DNN_TARGET_OPENCL)
+                print("Using OpenCL acceleration")
+            else:
+                net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+                print("Using CPU for inference")
+        except:
+            net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+            print("Fallback to CPU for inference")
         
         # Get output layer names
         layer_names = net.getLayerNames()
@@ -82,9 +103,11 @@ def detect_vehicles(video_source, intersection_id):
             print(f"Attempt {retry_count + 1}/{max_retries} to connect to laptop camera")
             cap = cv2.VideoCapture(0)  # Use laptop camera (index 0)
             
-            # Set camera resolution to improve performance
+            # Set camera properties for better performance
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            cap.set(cv2.CAP_PROP_FPS, 30)  # Request 30 FPS
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))  # Use MJPG codec for better speed
             
             if not cap.isOpened():
                 print(f"Failed to open camera. Retrying...")
@@ -137,10 +160,12 @@ def detect_vehicles(video_source, intersection_id):
     
     # Main processing loop
     frame_count = 0
-    process_every_n_frames = 5  # Process every 5th frame to reduce CPU usage
+    process_every_n_frames = frame_processing["skip_frames"]  # Process every Nth frame to reduce CPU usage
     
     while True:
         try:
+            start_time = time.time()
+            
             # Read a frame from the camera
             ret, frame = cap.read()
             
@@ -154,32 +179,53 @@ def detect_vehicles(video_source, intersection_id):
                     time.sleep(5)  # Wait longer before retry
                 continue
             
-            # Update the latest frame for video streaming
+            # Update the latest frame for video streaming (unprocessed)
             with frame_lock:
-                # Draw the current time on the frame
-                current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                cv2.putText(frame, f"Traffic Camera: {current_time}", (10, 30), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                # Add intersection name
-                cv2.putText(frame, "Main Street Intersection", (10, 60), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                # Add the current signal status
-                signal_status = traffic_signals.get(intersection_id, "unknown")
-                signal_color = (0, 0, 255)  # red
-                if signal_status == "green":
-                    signal_color = (0, 255, 0)
-                elif signal_status == "yellow":
-                    signal_color = (0, 255, 255)
-                cv2.putText(frame, f"Signal: {signal_status.upper()}", (10, 90), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, signal_color, 2)
-                
                 latest_frame = frame.copy()
             
             # Only process every nth frame to improve performance
             frame_count += 1
-            if frame_count % process_every_n_frames != 0:
-                continue
             
+            # Create a copy for processing
+            process_frame = frame.copy()
+            
+            # Full processing (object detection) only on every nth frame
+            full_processing = (frame_count % process_every_n_frames == 0)
+            
+            # Always add timestamp and basic info to the frame
+            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            cv2.putText(process_frame, f"Traffic Camera: {current_time}", (10, 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(process_frame, "Main Street Intersection", (10, 60), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            
+            # Add the current signal status
+            with data_lock:
+                signal_status = traffic_signals.get(intersection_id, "unknown")
+            
+            signal_color = (0, 0, 255)  # red
+            if signal_status == "green":
+                signal_color = (0, 255, 0)
+            elif signal_status == "yellow":
+                signal_color = (0, 255, 255)
+                
+            cv2.putText(process_frame, f"Signal: {signal_status.upper()}", (10, 90), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, signal_color, 2)
+            
+            # Update processed frame that will be used for streaming
+            with frame_lock:
+                processed_frame = process_frame.copy()
+            
+            # Skip full processing if not needed this frame
+            if not full_processing:
+                elapsed = time.time() - start_time
+                sleep_time = max(0.001, (1.0/frame_processing["stream_fps"]) - elapsed)
+                time.sleep(sleep_time)  # Control the loop speed
+                continue
+                
+            # Record time of full processing
+            frame_processing["last_full_process_time"] = time.time()
+                
             # Preprocess the frame
             height, width, channels = frame.shape
             blob = cv2.dnn.blobFromImage(frame, 1/255.0, (416, 416), swapRB=True, crop=False)
@@ -240,18 +286,18 @@ def detect_vehicles(video_source, intersection_id):
                                         has_emergency = True
                                         print(f"Emergency vehicle detected at {intersection_id}!")
                                         
-                                        # Draw box around emergency vehicle in the latest frame
+                                        # Draw box around emergency vehicle in the processed frame
                                         with frame_lock:
-                                            cv2.rectangle(latest_frame, (x, y), (x + w, y + h), (0, 0, 255), 2)
-                                            cv2.putText(latest_frame, "EMERGENCY VEHICLE", (x, y - 10), 
+                                            cv2.rectangle(processed_frame, (x, y), (x + w, y + h), (0, 0, 255), 2)
+                                            cv2.putText(processed_frame, "EMERGENCY VEHICLE", (x, y - 10), 
                                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
                             
-                            # Draw bounding box for each vehicle in the latest frame
+                            # Draw bounding box for each vehicle in the processed frame
                             with frame_lock:
                                 x = int(center_x - w / 2)
                                 y = int(center_y - h / 2)
-                                cv2.rectangle(latest_frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
-                                cv2.putText(latest_frame, classes[class_id], (x, y - 5), 
+                                cv2.rectangle(processed_frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+                                cv2.putText(processed_frame, classes[class_id], (x, y - 5), 
                                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
             
             # Update traffic data with thread safety
@@ -271,45 +317,68 @@ def detect_vehicles(video_source, intersection_id):
             if frame_count % 100 == 0:
                 print(f"Intersection {intersection_id}: {vehicle_count} vehicles, Emergency: {has_emergency}")
                 
+            # Control the loop speed based on target FPS
+            elapsed = time.time() - start_time
+            sleep_time = max(0.001, (1.0/frame_processing["stream_fps"]) - elapsed)
+            time.sleep(sleep_time)
+                
         except Exception as e:
             print(f"Error in video processing for {intersection_id}: {e}")
-            time.sleep(1)
+            time.sleep(0.1)
         
-        # Small delay to reduce CPU usage
-        time.sleep(0.01)
-    
     # Cleanup (this will only execute if we break the loop)
     if cap is not None:
         cap.release()
     cv2.destroyAllWindows()
 
-def generate_frames():
+def generate_frames(fps_requested=1):
     """
-    Generator function for video streaming
+    Generator function for video streaming with adjustable quality
     """
+    global processed_frame
+    
+    fps_limit = min(fps_requested, frame_processing["stream_fps"])
+    interval = 1.0 / max(0.5, fps_limit)  # At least 0.5 FPS, but limit to requested FPS
+    last_frame_time = 0
+    
     while True:
+        # Respect requested FPS
+        current_time = time.time()
+        elapsed = current_time - last_frame_time
+        if elapsed < interval:
+            time.sleep(0.01)  # Small sleep to prevent CPU hogging
+            continue
+            
+        last_frame_time = current_time
+        
         # Wait until we have a frame
-        if latest_frame is None:
+        if processed_frame is None:
             time.sleep(0.1)
             continue
             
+        # Use processed frame with annotations
         with frame_lock:
-            if latest_frame is not None:
-                frame = latest_frame.copy()
+            if processed_frame is not None:
+                frame = processed_frame.copy()
             else:
                 continue
+        
+        # Resize for streaming if needed
+        if frame_processing["max_width"] < frame.shape[1]:
+            scale = frame_processing["max_width"] / frame.shape[1]
+            new_width = frame_processing["max_width"]
+            new_height = int(frame.shape[0] * scale)
+            frame = cv2.resize(frame, (new_width, new_height))
                 
-        # Encode the frame as JPEG
-        ret, buffer = cv2.imencode('.jpg', frame)
+        # Encode the frame as JPEG with quality setting
+        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), frame_processing["frame_quality"]]
+        ret, buffer = cv2.imencode('.jpg', frame, encode_param)
         if not ret:
             continue
             
         # Yield the frame in the multipart response format
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-        
-        # Rate limit to ~15 FPS
-        time.sleep(1/15)
 
 @app.route('/api/traffic', methods=['GET'])
 def get_traffic_data():
@@ -349,10 +418,32 @@ def update_signal():
 @app.route('/api/video_feed')
 def video_feed():
     """
-    Video streaming route for the camera feed
+    Video streaming route for the camera feed with quality parameter
     """
-    return Response(generate_frames(),
+    # Get requested FPS from query parameter
+    fps = request.args.get('fps', 1, type=float)
+    # Update frame quality based on FPS (higher FPS = lower quality to maintain performance)
+    if fps <= 0.5:
+        frame_processing["frame_quality"] = 75  # Higher quality for low FPS
+    elif fps <= 1:
+        frame_processing["frame_quality"] = 70  # Medium quality
+    else:
+        frame_processing["frame_quality"] = 65  # Lower quality for high FPS
+    
+    return Response(generate_frames(fps),
                    mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/api/stream_status')
+def stream_status():
+    """
+    Return stream status information for diagnostics
+    """
+    return jsonify({
+        "stream_fps": frame_processing["stream_fps"],
+        "process_skip_frames": frame_processing["skip_frames"],
+        "frame_quality": frame_processing["frame_quality"],
+        "last_processed": time.time() - frame_processing["last_full_process_time"]
+    })
 
 if __name__ == '__main__':
     # Create directory for YOLO files if it doesn't exist
@@ -381,4 +472,4 @@ if __name__ == '__main__':
     
     # Start the Flask app
     print("Starting Flask server on http://0.0.0.0:5000")
-    app.run(debug=False, host='0.0.0.0', port=5000)
+    app.run(debug=False, threaded=True, host='0.0.0.0', port=5000)
