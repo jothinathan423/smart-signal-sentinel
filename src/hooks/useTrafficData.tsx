@@ -1,6 +1,5 @@
-
 import { useState, useEffect, useCallback } from "react";
-import { fetchTrafficData, updateTrafficSignal, TrafficData } from "@/lib/api";
+import { fetchTrafficData, updateTrafficSignal, getCameraStreamUrl, TrafficData } from "@/lib/api";
 
 // Define the intersection data structure
 export interface Intersection {
@@ -48,9 +47,8 @@ export const useTrafficData = () => {
   
   // Optimize camera URL with a timestamp-based approach
   useEffect(() => {
-    const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
-    // Use a direct URL without timestamp - we'll add that in the component
-    setCameraUrl(`${API_BASE_URL}/api/video_feed`);
+    // Use the optimized camera URL function
+    setCameraUrl(getCameraStreamUrl());
   }, []);
 
   // Fetch traffic data from the backend

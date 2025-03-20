@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AlertCircle, Camera } from "lucide-react";
@@ -13,6 +14,7 @@ const CameraFeed = ({ cameraUrl, title = "Traffic Camera", className }: CameraFe
   const [error, setError] = useState<string | null>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const [retryCount, setRetryCount] = useState(0);
+  const [frameRate, setFrameRate] = useState(1); // 1 fps by default
 
   // Handle image loading with optimized refresh cycle
   useEffect(() => {
@@ -30,16 +32,16 @@ const CameraFeed = ({ cameraUrl, title = "Traffic Camera", className }: CameraFe
       if (imgRef.current && !isLoading && !error) {
         // Add timestamp to URL to prevent caching
         const timestamp = new Date().getTime();
-        const refreshUrl = `${cameraUrl}?t=${timestamp}`;
+        const refreshUrl = `${cameraUrl}?t=${timestamp}&fps=${frameRate}`;
         imgRef.current.src = refreshUrl;
       }
-    }, 1000); // Refresh image every second to maintain stream
+    }, 1000 / frameRate); // Adjust refresh rate based on frameRate
 
     return () => {
       clearTimeout(errorTimer);
       clearInterval(refreshTimer);
     };
-  }, [cameraUrl, isLoading, error, retryCount]);
+  }, [cameraUrl, isLoading, error, retryCount, frameRate]);
 
   const handleRetry = () => {
     setError(null);
@@ -49,8 +51,13 @@ const CameraFeed = ({ cameraUrl, title = "Traffic Camera", className }: CameraFe
     // Force reload with new timestamp
     if (imgRef.current) {
       const timestamp = new Date().getTime();
-      imgRef.current.src = `${cameraUrl}?t=${timestamp}`;
+      imgRef.current.src = `${cameraUrl}?t=${timestamp}&fps=${frameRate}`;
     }
+  };
+
+  const handleQualityChange = (newFrameRate: number) => {
+    setFrameRate(newFrameRate);
+    // No need to update src immediately, the effect will handle it
   };
 
   return (
@@ -82,9 +89,32 @@ const CameraFeed = ({ cameraUrl, title = "Traffic Camera", className }: CameraFe
                 <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full"></div>
               </div>
             )}
+            <div className="absolute top-2 right-2 z-20 bg-black/50 rounded-lg px-2 py-1 text-xs text-white flex items-center gap-2">
+              <span>Quality:</span>
+              <div className="flex gap-1">
+                <button 
+                  onClick={() => handleQualityChange(0.5)} 
+                  className={`px-2 py-0.5 rounded ${frameRate === 0.5 ? 'bg-primary' : 'bg-gray-700'}`}
+                >
+                  Low
+                </button>
+                <button 
+                  onClick={() => handleQualityChange(1)} 
+                  className={`px-2 py-0.5 rounded ${frameRate === 1 ? 'bg-primary' : 'bg-gray-700'}`}
+                >
+                  Medium
+                </button>
+                <button 
+                  onClick={() => handleQualityChange(2)} 
+                  className={`px-2 py-0.5 rounded ${frameRate === 2 ? 'bg-primary' : 'bg-gray-700'}`}
+                >
+                  High
+                </button>
+              </div>
+            </div>
             <img
               ref={imgRef}
-              src={`${cameraUrl}?t=${Date.now()}`}
+              src={`${cameraUrl}?t=${Date.now()}&fps=${frameRate}`}
               alt="Traffic Camera Feed"
               className="w-full h-auto"
               onLoad={() => setIsLoading(false)}

@@ -1,4 +1,3 @@
-
 // API interface for communicating with our Python backend
 import { toast } from "sonner";
 
@@ -61,4 +60,9 @@ export const updateTrafficSignal = async (
     console.error("Error updating traffic signal:", error);
     toast.error("Failed to update traffic signal. Check backend connection.");
   }
+};
+
+// Get camera URL with appropriate parameters
+export const getCameraStreamUrl = (fps: number = 1): string => {
+  return `${API_BASE_URL}/api/video_feed?fps=${fps}`;
 };
