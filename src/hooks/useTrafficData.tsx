@@ -1,5 +1,5 @@
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { fetchTrafficData, updateTrafficSignal, TrafficData } from "@/lib/api";
 
 // Define the intersection data structure
@@ -46,9 +46,10 @@ export const useTrafficData = () => {
   const [historyData, setHistoryData] = useState<HistoryDataPoint[]>(generateHistoryData());
   const [cameraUrl, setCameraUrl] = useState<string>("");
   
-  // Set up camera URL
+  // Optimize camera URL with a timestamp-based approach
   useEffect(() => {
     const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+    // Use a direct URL without timestamp - we'll add that in the component
     setCameraUrl(`${API_BASE_URL}/api/video_feed`);
   }, []);
 
@@ -98,7 +99,7 @@ export const useTrafficData = () => {
   }, []);
 
   // Update traffic signal status
-  const updateTrafficStatus = async (id: string, status: "red" | "yellow" | "green") => {
+  const updateTrafficStatus = useCallback(async (id: string, status: "red" | "yellow" | "green") => {
     try {
       await updateTrafficSignal(id, status);
       
@@ -113,7 +114,7 @@ export const useTrafficData = () => {
     } catch (err) {
       console.error("Failed to update traffic signal:", err);
     }
-  };
+  }, []);
 
   return {
     intersections,
