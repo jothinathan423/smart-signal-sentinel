@@ -1,7 +1,7 @@
 
 import cv2
 import numpy as np
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, Response
 from flask_cors import CORS
 import time
 import threading
@@ -29,11 +29,15 @@ emergency_config = {
 
 # Lock for thread-safe access to shared data
 data_lock = threading.Lock()
+# Latest frame for video streaming
+latest_frame = None
+frame_lock = threading.Lock()
 
 def detect_vehicles(video_source, intersection_id):
     """
     Process video feed to count vehicles and detect emergency vehicles
     """
+    global latest_frame
     print(f"Starting vehicle detection for intersection {intersection_id} using laptop camera")
     
     # Load pre-trained vehicle detection model (using YOLO)
@@ -150,6 +154,27 @@ def detect_vehicles(video_source, intersection_id):
                     time.sleep(5)  # Wait longer before retry
                 continue
             
+            # Update the latest frame for video streaming
+            with frame_lock:
+                # Draw the current time on the frame
+                current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                cv2.putText(frame, f"Traffic Camera: {current_time}", (10, 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                # Add intersection name
+                cv2.putText(frame, "Main Street Intersection", (10, 60), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                # Add the current signal status
+                signal_status = traffic_signals.get(intersection_id, "unknown")
+                signal_color = (0, 0, 255)  # red
+                if signal_status == "green":
+                    signal_color = (0, 255, 0)
+                elif signal_status == "yellow":
+                    signal_color = (0, 255, 255)
+                cv2.putText(frame, f"Signal: {signal_status.upper()}", (10, 90), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, signal_color, 2)
+                
+                latest_frame = frame.copy()
+            
             # Only process every nth frame to improve performance
             frame_count += 1
             if frame_count % process_every_n_frames != 0:
@@ -214,12 +239,20 @@ def detect_vehicles(video_source, intersection_id):
                                     if red_percent > 5 or blue_percent > 5:
                                         has_emergency = True
                                         print(f"Emergency vehicle detected at {intersection_id}!")
-            
-            # Optionally display the camera feed with bounding boxes (for testing)
-            # Uncomment this block if you want to see the video feed with detections
-            # cv2.imshow(f"Traffic Camera - {intersection_id}", frame)
-            # if cv2.waitKey(1) & 0xFF == ord('q'):
-            #     break
+                                        
+                                        # Draw box around emergency vehicle in the latest frame
+                                        with frame_lock:
+                                            cv2.rectangle(latest_frame, (x, y), (x + w, y + h), (0, 0, 255), 2)
+                                            cv2.putText(latest_frame, "EMERGENCY VEHICLE", (x, y - 10), 
+                                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                            
+                            # Draw bounding box for each vehicle in the latest frame
+                            with frame_lock:
+                                x = int(center_x - w / 2)
+                                y = int(center_y - h / 2)
+                                cv2.rectangle(latest_frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+                                cv2.putText(latest_frame, classes[class_id], (x, y - 5), 
+                                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
             
             # Update traffic data with thread safety
             with data_lock:
@@ -249,6 +282,34 @@ def detect_vehicles(video_source, intersection_id):
     if cap is not None:
         cap.release()
     cv2.destroyAllWindows()
+
+def generate_frames():
+    """
+    Generator function for video streaming
+    """
+    while True:
+        # Wait until we have a frame
+        if latest_frame is None:
+            time.sleep(0.1)
+            continue
+            
+        with frame_lock:
+            if latest_frame is not None:
+                frame = latest_frame.copy()
+            else:
+                continue
+                
+        # Encode the frame as JPEG
+        ret, buffer = cv2.imencode('.jpg', frame)
+        if not ret:
+            continue
+            
+        # Yield the frame in the multipart response format
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+        
+        # Rate limit to ~15 FPS
+        time.sleep(1/15)
 
 @app.route('/api/traffic', methods=['GET'])
 def get_traffic_data():
@@ -284,6 +345,14 @@ def update_signal():
     
     print(f"Changing traffic signal at {intersection_id} to {status}")
     return jsonify({"success": True})
+
+@app.route('/api/video_feed')
+def video_feed():
+    """
+    Video streaming route for the camera feed
+    """
+    return Response(generate_frames(),
+                   mimetype='multipart/x-mixed-replace; boundary=frame')
 
 if __name__ == '__main__':
     # Create directory for YOLO files if it doesn't exist

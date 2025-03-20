@@ -3,12 +3,13 @@ import React from "react";
 import Navigation from "@/components/Navigation";
 import Intersection from "@/components/Intersection";
 import TrafficGraph from "@/components/TrafficGraph";
+import CameraFeed from "@/components/CameraFeed";
 import { useTrafficData } from "@/hooks/useTrafficData";
 import { Button } from "@/components/ui/button";
 import { RefreshCw, AlertTriangle } from "lucide-react";
 
 const Dashboard = () => {
-  const { intersections, historyData, loading, error, updateTrafficStatus } = useTrafficData();
+  const { intersections, historyData, loading, error, updateTrafficStatus, cameraUrl } = useTrafficData();
   
   // Get the single intersection or null if none
   const intersection = intersections.length > 0 ? intersections[0] : null;
@@ -54,7 +55,11 @@ const Dashboard = () => {
           )}
 
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-            <div className="lg:col-span-3 space-y-6">
+            <div className="lg:col-span-2">
+              <CameraFeed cameraUrl={cameraUrl} title="Live Traffic Camera" />
+            </div>
+            
+            <div className="lg:col-span-2">
               {intersection ? (
                 <Intersection
                   key={intersection.id}
@@ -73,10 +78,14 @@ const Dashboard = () => {
                 </div>
               ) : null}
             </div>
-            
-            <div className="lg:col-span-1 space-y-6">
+          </div>
+          
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+            <div className="lg:col-span-3">
               <TrafficGraph data={historyData} />
-              
+            </div>
+            
+            <div className="lg:col-span-1">
               <div className="rounded-xl glass p-4 space-y-3">
                 <div className="text-xs uppercase tracking-wider font-medium text-muted-foreground">
                   System Status

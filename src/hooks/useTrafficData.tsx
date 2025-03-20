@@ -44,6 +44,13 @@ export const useTrafficData = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [historyData, setHistoryData] = useState<HistoryDataPoint[]>(generateHistoryData());
+  const [cameraUrl, setCameraUrl] = useState<string>("");
+  
+  // Set up camera URL
+  useEffect(() => {
+    const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+    setCameraUrl(`${API_BASE_URL}/api/video_feed`);
+  }, []);
 
   // Fetch traffic data from the backend
   useEffect(() => {
@@ -114,5 +121,6 @@ export const useTrafficData = () => {
     loading,
     error,
     updateTrafficStatus,
+    cameraUrl,
   };
 };
