@@ -1,19 +1,44 @@
 
-import React from "react";
+import React, { useState } from "react";
 import Navigation from "@/components/Navigation";
 import Intersection from "@/components/Intersection";
 import TrafficGraph from "@/components/TrafficGraph";
 import CameraFeed from "@/components/CameraFeed";
+import ViolationsList from "@/components/ViolationsList";
 import { useTrafficData } from "@/hooks/useTrafficData";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, AlertTriangle } from "lucide-react";
+import { RefreshCw, AlertTriangle, FileWarning, Scan } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const Dashboard = () => {
-  const { intersections, historyData, loading, error, updateTrafficStatus, cameraUrl } = useTrafficData();
+  const { 
+    intersections, 
+    historyData, 
+    loading, 
+    error, 
+    updateTrafficStatus, 
+    cameraUrl,
+    violations,
+    loadingViolations,
+    checkViolations,
+    refreshViolations
+  } = useTrafficData();
+  
+  const [checkingViolations, setCheckingViolations] = useState(false);
+  const [activeTab, setActiveTab] = useState<string>("status");
   
   // Get the single intersection or null if none
   const intersection = intersections.length > 0 ? intersections[0] : null;
   const emergency = intersection?.emergency || false;
+
+  const handleCheckViolations = async () => {
+    setCheckingViolations(true);
+    try {
+      await checkViolations();
+    } finally {
+      setCheckingViolations(false);
+    }
+  };
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -60,29 +85,83 @@ const Dashboard = () => {
             </div>
             
             <div className="lg:col-span-2">
-              {intersection ? (
-                <Intersection
-                  key={intersection.id}
-                  {...intersection}
-                  onStatusChange={updateTrafficStatus}
-                />
-              ) : !loading ? (
-                <div className="flex flex-col items-center justify-center py-12 bg-muted/20 rounded-xl">
-                  <div className="bg-muted p-4 rounded-full mb-4">
-                    <AlertTriangle className="h-6 w-6 text-muted-foreground" />
+              <div className="flex flex-col gap-4">
+                {intersection ? (
+                  <Intersection
+                    key={intersection.id}
+                    {...intersection}
+                    onStatusChange={updateTrafficStatus}
+                  />
+                ) : !loading ? (
+                  <div className="flex flex-col items-center justify-center py-12 bg-muted/20 rounded-xl">
+                    <div className="bg-muted p-4 rounded-full mb-4">
+                      <AlertTriangle className="h-6 w-6 text-muted-foreground" />
+                    </div>
+                    <h3 className="text-lg font-medium">No Traffic Data</h3>
+                    <p className="text-muted-foreground text-center max-w-md mt-2">
+                      There is no traffic data available. Please ensure the backend server is running and your laptop camera is accessible.
+                    </p>
                   </div>
-                  <h3 className="text-lg font-medium">No Traffic Data</h3>
-                  <p className="text-muted-foreground text-center max-w-md mt-2">
-                    There is no traffic data available. Please ensure the backend server is running and your laptop camera is accessible.
-                  </p>
-                </div>
-              ) : null}
+                ) : null}
+                
+                <Button 
+                  onClick={handleCheckViolations} 
+                  disabled={checkingViolations || !intersection}
+                  variant="default"
+                  className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+                >
+                  {checkingViolations ? (
+                    <>
+                      <div className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2"></div>
+                      Scanning for violations...
+                    </>
+                  ) : (
+                    <>
+                      <Scan className="h-4 w-4 mr-2" />
+                      Check for Traffic Violations
+                    </>
+                  )}
+                </Button>
+              </div>
             </div>
           </div>
           
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
             <div className="lg:col-span-3">
-              <TrafficGraph data={historyData} />
+              <Tabs value={activeTab} onValueChange={setActiveTab}>
+                <TabsList className="mb-4">
+                  <TabsTrigger value="status">Traffic History</TabsTrigger>
+                  <TabsTrigger value="violations" className="flex items-center gap-1.5">
+                    <FileWarning className="h-4 w-4" />
+                    Violations
+                    {violations.length > 0 && (
+                      <span className="bg-destructive/20 text-destructive text-xs px-1.5 py-0.5 rounded-full">
+                        {violations.length}
+                      </span>
+                    )}
+                  </TabsTrigger>
+                </TabsList>
+                
+                <TabsContent value="status" className="mt-0">
+                  <TrafficGraph data={historyData} />
+                </TabsContent>
+                
+                <TabsContent value="violations" className="mt-0">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold">Recent Traffic Violations</h3>
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={refreshViolations}
+                      disabled={loadingViolations}
+                    >
+                      <RefreshCw className={`h-4 w-4 mr-2 ${loadingViolations ? 'animate-spin' : ''}`} />
+                      Refresh
+                    </Button>
+                  </div>
+                  <ViolationsList violations={violations} isLoading={loadingViolations} />
+                </TabsContent>
+              </Tabs>
             </div>
             
             <div className="lg:col-span-1">
@@ -109,6 +188,12 @@ const Dashboard = () => {
                     <span className="text-sm">Last Update</span>
                     <span className="font-mono text-xs">
                       {intersection?.lastUpdated || new Date().toLocaleTimeString()}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm">Violations</span>
+                    <span className="font-mono">
+                      {violations.length}
                     </span>
                   </div>
                 </div>

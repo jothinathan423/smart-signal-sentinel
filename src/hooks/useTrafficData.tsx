@@ -1,5 +1,13 @@
 import { useState, useEffect, useCallback } from "react";
-import { fetchTrafficData, updateTrafficSignal, getCameraStreamUrl, TrafficData } from "@/lib/api";
+import { 
+  fetchTrafficData, 
+  updateTrafficSignal, 
+  getCameraStreamUrl, 
+  TrafficData,
+  checkTrafficViolations,
+  fetchViolations,
+  ViolationData
+} from "@/lib/api";
 
 // Define the intersection data structure
 export interface Intersection {
@@ -44,6 +52,8 @@ export const useTrafficData = () => {
   const [error, setError] = useState<string | null>(null);
   const [historyData, setHistoryData] = useState<HistoryDataPoint[]>(generateHistoryData());
   const [cameraUrl, setCameraUrl] = useState<string>("");
+  const [violations, setViolations] = useState<ViolationData[]>([]);
+  const [loadingViolations, setLoadingViolations] = useState(false);
   
   // Optimize camera URL with a timestamp-based approach
   useEffect(() => {
@@ -114,6 +124,38 @@ export const useTrafficData = () => {
     }
   }, []);
 
+  // Check for traffic violations
+  const checkViolations = useCallback(async () => {
+    if (intersections.length === 0) return false;
+    
+    const result = await checkTrafficViolations(intersections[0].id);
+    
+    // Refresh violations list if violations were found
+    if (result) {
+      await loadViolations();
+    }
+    
+    return result;
+  }, [intersections]);
+
+  // Load traffic violations
+  const loadViolations = useCallback(async () => {
+    try {
+      setLoadingViolations(true);
+      const data = await fetchViolations();
+      setViolations(data);
+    } catch (err) {
+      console.error("Failed to fetch violations:", err);
+    } finally {
+      setLoadingViolations(false);
+    }
+  }, []);
+
+  // Load violations when component mounts
+  useEffect(() => {
+    loadViolations();
+  }, [loadViolations]);
+
   return {
     intersections,
     historyData,
@@ -121,5 +163,9 @@ export const useTrafficData = () => {
     error,
     updateTrafficStatus,
     cameraUrl,
+    violations,
+    loadingViolations,
+    checkViolations,
+    refreshViolations: loadViolations,
   };
 };

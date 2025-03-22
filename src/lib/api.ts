@@ -1,3 +1,4 @@
+
 // API interface for communicating with our Python backend
 import { toast } from "sonner";
 
@@ -7,6 +8,16 @@ export interface TrafficData {
   hasEmergencyVehicle: boolean;
   timestamp: string;
   status?: "red" | "yellow" | "green";
+}
+
+export interface ViolationData {
+  id: string;
+  vehicleNumber: string;
+  type: "red_light" | "speeding" | "other";
+  timestamp: string;
+  location: string;
+  details?: string;
+  imageUrl?: string;
 }
 
 // Base URL for the backend API
@@ -65,4 +76,58 @@ export const updateTrafficSignal = async (
 // Get camera URL with appropriate parameters
 export const getCameraStreamUrl = (fps: number = 1): string => {
   return `${API_BASE_URL}/api/video_feed?fps=${fps}`;
+};
+
+// Trigger traffic violation check on the backend
+export const checkTrafficViolations = async (intersectionId: string): Promise<boolean> => {
+  try {
+    console.log(`Checking for traffic violations at intersection ${intersectionId}`);
+    const response = await fetch(`${API_BASE_URL}/api/traffic/check_violations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ intersectionId }),
+    });
+    
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`);
+    }
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      if (result.violations > 0) {
+        toast.success(`Detected ${result.violations} traffic violation(s)!`);
+      } else {
+        toast.info("No traffic violations detected.");
+      }
+      return result.violations > 0;
+    } else {
+      toast.error(result.error || "Failed to check for traffic violations");
+      return false;
+    }
+  } catch (error) {
+    console.error("Error checking traffic violations:", error);
+    toast.error("Failed to check for violations. Check backend connection.");
+    return false;
+  }
+};
+
+// Fetch recent traffic violations
+export const fetchViolations = async (): Promise<ViolationData[]> => {
+  try {
+    console.log('Fetching traffic violations from:', `${API_BASE_URL}/api/traffic/violations`);
+    const response = await fetch(`${API_BASE_URL}/api/traffic/violations`);
+    
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log('Received violation data:', data);
+    return data;
+  } catch (error) {
+    console.error("Error fetching traffic violations:", error);
+    toast.error("Failed to fetch violation data. Make sure the backend server is running.");
+    return [];
+  }
 };
