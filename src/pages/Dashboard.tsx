@@ -21,7 +21,8 @@ const Dashboard = () => {
     violations,
     loadingViolations,
     checkViolations,
-    refreshViolations
+    refreshViolations,
+    toggleAutoTrafficControl
   } = useTrafficData();
   
   const [checkingViolations, setCheckingViolations] = useState(false);
@@ -38,6 +39,10 @@ const Dashboard = () => {
     } finally {
       setCheckingViolations(false);
     }
+  };
+
+  const handleAutoModeChange = async (id: string, enabled: boolean) => {
+    await toggleAutoTrafficControl(id, enabled);
   };
 
   return (
@@ -91,6 +96,7 @@ const Dashboard = () => {
                     key={intersection.id}
                     {...intersection}
                     onStatusChange={updateTrafficStatus}
+                    onAutoModeChange={handleAutoModeChange}
                   />
                 ) : !loading ? (
                   <div className="flex flex-col items-center justify-center py-12 bg-muted/20 rounded-xl">
@@ -177,6 +183,10 @@ const Dashboard = () => {
                   <div className="flex justify-between items-center">
                     <span className="text-sm">Emergency Vehicle</span>
                     <span className="font-mono">{intersection?.emergency ? "Detected" : "None"}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm">Auto Control</span>
+                    <span className="font-mono">{intersection?.autoMode ? "Active" : "Manual"}</span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-sm">Vehicle Count</span>

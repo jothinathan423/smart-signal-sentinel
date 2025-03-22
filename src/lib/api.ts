@@ -8,6 +8,7 @@ export interface TrafficData {
   hasEmergencyVehicle: boolean;
   timestamp: string;
   status?: "red" | "yellow" | "green";
+  autoMode?: boolean;
 }
 
 export interface ViolationData {
@@ -70,6 +71,39 @@ export const updateTrafficSignal = async (
   } catch (error) {
     console.error("Error updating traffic signal:", error);
     toast.error("Failed to update traffic signal. Check backend connection.");
+  }
+};
+
+// Toggle automatic traffic control mode
+export const toggleAutoMode = async (
+  intersectionId: string,
+  enabled: boolean
+): Promise<boolean> => {
+  try {
+    console.log(`Setting auto control mode for ${intersectionId} to ${enabled ? 'enabled' : 'disabled'}`);
+    const response = await fetch(`${API_BASE_URL}/api/traffic/auto_control`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ intersectionId, enabled }),
+    });
+    
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`);
+    }
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      toast.success(`Auto control mode ${enabled ? 'enabled' : 'disabled'}`);
+      return true;
+    } else {
+      toast.error(result.error || "Failed to update auto control mode");
+      return false;
+    }
+  } catch (error) {
+    console.error("Error toggling auto control mode:", error);
+    toast.error("Failed to toggle auto control. Check backend connection.");
+    return false;
   }
 };
 

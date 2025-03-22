@@ -7,9 +7,25 @@ import time
 import threading
 import os
 from datetime import datetime
+import random
+import pymongo
+from bson import ObjectId
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
+
+# MongoDB setup - connect to local MongoDB or skip if not available
+mongo_client = None
+db = None
+try:
+    mongo_client = pymongo.MongoClient("mongodb://localhost:27017/", serverSelectionTimeoutMS=2000)
+    mongo_client.server_info()  # Will raise exception if connection fails
+    db = mongo_client["traffic_management"]
+    violations_collection = db["violations"]
+    print("Successfully connected to MongoDB")
+except Exception as e:
+    print(f"Warning: Could not connect to MongoDB: {e}")
+    print("Vehicle violations will not be stored in database")
 
 # Store the latest traffic data
 traffic_data = {
@@ -21,11 +37,47 @@ traffic_signals = {
     "int-001": "red",
 }
 
+# Automatic control configuration
+auto_control = {
+    "int-001": {
+        "enabled": False,
+        "last_change_time": time.time(),
+        "cycle_times": {
+            "red": 30,  # 30 seconds for red
+            "yellow": 5,  # 5 seconds for yellow
+            "green": 30,  # 30 seconds for green
+        },
+        "vehicle_thresholds": {
+            "low": 5,    # 0-5 vehicles
+            "medium": 15,  # 6-15 vehicles
+            "high": 99999  # >15 vehicles
+        },
+        "cycle_adjustments": {
+            "low": 0.7,     # Reduce times by 30%
+            "medium": 1.0,  # Normal times
+            "high": 1.3,    # Increase times by 30%
+        }
+    }
+}
+
 # Configuration for emergency vehicle detection
 emergency_config = {
     "min_size": 80,  # Minimum size of emergency vehicle to detect
     "confidence_threshold": 0.5,  # Confidence threshold for detection
 }
+
+# Store detected vehicle information
+detected_vehicles = {
+    "int-001": []  # List to store vehicle data like position, speed, etc.
+}
+
+# Last stored vehicle positions for speed estimation
+last_vehicle_positions = {
+    "int-001": {}  # Dictionary of vehicle IDs to positions
+}
+
+# Vehicle ID counter
+next_vehicle_id = 1
 
 # Lock for thread-safe access to shared data
 data_lock = threading.Lock()
@@ -43,11 +95,59 @@ frame_processing = {
     "stream_fps": 15  # Target FPS for streaming
 }
 
+def update_traffic_signal_automatic(intersection_id):
+    """
+    Automatically update the traffic signal based on time and vehicle count
+    """
+    # Skip if auto mode is not enabled
+    if not auto_control[intersection_id]["enabled"]:
+        return
+        
+    current_time = time.time()
+    last_change_time = auto_control[intersection_id]["last_change_time"]
+    current_signal = traffic_signals[intersection_id]
+    
+    # Get current vehicle count
+    vehicle_count = traffic_data[intersection_id]["vehicleCount"]
+    
+    # Determine traffic level
+    thresholds = auto_control[intersection_id]["vehicle_thresholds"]
+    if vehicle_count <= thresholds["low"]:
+        traffic_level = "low"
+    elif vehicle_count <= thresholds["medium"]:
+        traffic_level = "medium"
+    else:
+        traffic_level = "high"
+    
+    # Adjust cycle times based on traffic
+    adjustment = auto_control[intersection_id]["cycle_adjustments"][traffic_level]
+    
+    # Get time for current phase
+    cycle_times = auto_control[intersection_id]["cycle_times"]
+    adjusted_time = cycle_times[current_signal] * adjustment
+    
+    # Check if we need to change the signal
+    if current_time - last_change_time >= adjusted_time:
+        # Change to next signal
+        if current_signal == "red":
+            new_signal = "green"
+        elif current_signal == "green":
+            new_signal = "yellow"
+        else:  # yellow
+            new_signal = "red"
+            
+        # Update signal
+        with data_lock:
+            traffic_signals[intersection_id] = new_signal
+            auto_control[intersection_id]["last_change_time"] = current_time
+            
+        print(f"Auto mode: Changed signal at {intersection_id} from {current_signal} to {new_signal} (Traffic: {traffic_level})")
+
 def detect_vehicles(video_source, intersection_id):
     """
     Process video feed to count vehicles and detect emergency vehicles
     """
-    global latest_frame, processed_frame
+    global latest_frame, processed_frame, next_vehicle_id
     print(f"Starting vehicle detection for intersection {intersection_id} using laptop camera")
     
     # Load pre-trained vehicle detection model (using YOLO)
@@ -161,10 +261,17 @@ def detect_vehicles(video_source, intersection_id):
     # Main processing loop
     frame_count = 0
     process_every_n_frames = frame_processing["skip_frames"]  # Process every Nth frame to reduce CPU usage
+    last_auto_control_update = time.time()
     
     while True:
         try:
             start_time = time.time()
+            
+            # Check if we need to update auto traffic control
+            current_time = time.time()
+            if current_time - last_auto_control_update >= 1.0:  # Check every second
+                update_traffic_signal_automatic(intersection_id)
+                last_auto_control_update = current_time
             
             # Read a frame from the camera
             ret, frame = cap.read()
@@ -202,6 +309,7 @@ def detect_vehicles(video_source, intersection_id):
             # Add the current signal status
             with data_lock:
                 signal_status = traffic_signals.get(intersection_id, "unknown")
+                auto_enabled = auto_control.get(intersection_id, {}).get("enabled", False)
             
             signal_color = (0, 0, 255)  # red
             if signal_status == "green":
@@ -211,6 +319,9 @@ def detect_vehicles(video_source, intersection_id):
                 
             cv2.putText(process_frame, f"Signal: {signal_status.upper()}", (10, 90), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, signal_color, 2)
+                       
+            cv2.putText(process_frame, f"Auto Mode: {('ON' if auto_enabled else 'OFF')}", (10, 120), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 165, 0) if auto_enabled else (128, 128, 128), 2)
             
             # Update processed frame that will be used for streaming
             with frame_lock:
@@ -237,6 +348,7 @@ def detect_vehicles(video_source, intersection_id):
             # Process detections
             vehicle_count = 0
             has_emergency = False
+            current_vehicles = []
             
             for output in outputs:
                 for detection in output:
@@ -255,11 +367,36 @@ def detect_vehicles(video_source, intersection_id):
                             w = int(detection[2] * width)
                             h = int(detection[3] * height)
                             
+                            # Calculate position
+                            x = int(center_x - w / 2)
+                            y = int(center_y - h / 2)
+                            
+                            # Generate vehicle ID if new, track if existing
+                            vehicle_position = (center_x, center_y)
+                            vehicle_id = None
+                            
+                            # Check if this is a vehicle we're already tracking
+                            for known_id, known_pos in list(last_vehicle_positions.get(intersection_id, {}).items()):
+                                known_x, known_y = known_pos
+                                # If the center is close enough to a known vehicle, consider it the same one
+                                distance = ((center_x - known_x) ** 2 + (center_y - known_y) ** 2) ** 0.5
+                                if distance < 50:  # Threshold for considering it the same vehicle
+                                    vehicle_id = known_id
+                                    break
+                            
+                            # If no matching vehicle, create new ID
+                            if vehicle_id is None:
+                                vehicle_id = f"v-{next_vehicle_id}"
+                                next_vehicle_id += 1
+                            
+                            # Update position
+                            if intersection_id not in last_vehicle_positions:
+                                last_vehicle_positions[intersection_id] = {}
+                            last_vehicle_positions[intersection_id][vehicle_id] = vehicle_position
+                            
                             # Check for emergency vehicles (ambulances, police cars)
+                            is_emergency = False
                             if w > emergency_config["min_size"] and h > emergency_config["min_size"]:
-                                x = int(center_x - w / 2)
-                                y = int(center_y - h / 2)
-                                
                                 # Extract vehicle region
                                 if x >= 0 and y >= 0 and x+w < width and y+h < height:
                                     vehicle_roi = frame[y:y+h, x:x+w]
@@ -283,6 +420,7 @@ def detect_vehicles(video_source, intersection_id):
                                     
                                     # If enough red or blue pixels are detected, classify as emergency vehicle
                                     if red_percent > 5 or blue_percent > 5:
+                                        is_emergency = True
                                         has_emergency = True
                                         print(f"Emergency vehicle detected at {intersection_id}!")
                                         
@@ -292,25 +430,47 @@ def detect_vehicles(video_source, intersection_id):
                                             cv2.putText(processed_frame, "EMERGENCY VEHICLE", (x, y - 10), 
                                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
                             
+                            # Store vehicle data
+                            vehicle_data = {
+                                "id": vehicle_id,
+                                "type": classes[class_id],
+                                "position": vehicle_position,
+                                "size": (w, h),
+                                "is_emergency": is_emergency,
+                                "license_plate": generate_random_license_plate() if random.random() < 0.8 else None
+                            }
+                            current_vehicles.append(vehicle_data)
+                            
                             # Draw bounding box for each vehicle in the processed frame
                             with frame_lock:
-                                x = int(center_x - w / 2)
-                                y = int(center_y - h / 2)
-                                cv2.rectangle(processed_frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
-                                cv2.putText(processed_frame, classes[class_id], (x, y - 5), 
-                                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+                                box_color = (0, 0, 255) if is_emergency else (255, 0, 0)
+                                cv2.rectangle(processed_frame, (x, y), (x + w, y + h), box_color, 2)
+                                label = f"{classes[class_id]} {vehicle_id}"
+                                cv2.putText(processed_frame, label, (x, y - 5), 
+                                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, box_color, 2)
+                                
+                                # Add license plate if available
+                                if vehicle_data["license_plate"]:
+                                    cv2.putText(processed_frame, vehicle_data["license_plate"], (x, y + h + 15), 
+                                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+            
+            # Update the detected vehicles list
+            with data_lock:
+                detected_vehicles[intersection_id] = current_vehicles
             
             # Update traffic data with thread safety
             with data_lock:
                 # If emergency is detected, automatically set signal to green
                 if has_emergency and traffic_signals[intersection_id] != "green":
                     traffic_signals[intersection_id] = "green"
+                    auto_control[intersection_id]["last_change_time"] = time.time()
                     print(f"Emergency vehicle detected at {intersection_id}. Setting signal to green.")
                     
                 traffic_data[intersection_id] = {
                     "vehicleCount": vehicle_count,
                     "hasEmergencyVehicle": has_emergency,
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
+                    "autoMode": auto_control[intersection_id]["enabled"]
                 }
             
             # Print status update periodically
@@ -330,6 +490,61 @@ def detect_vehicles(video_source, intersection_id):
     if cap is not None:
         cap.release()
     cv2.destroyAllWindows()
+
+def generate_random_license_plate():
+    """Generate random license plate number for simulation"""
+    letters = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+    numbers = "0123456789"
+    
+    # State/prefix (2 letters) + 2 numbers + 3 letters
+    license_plate = ''.join(random.choice(letters) for _ in range(2))
+    license_plate += ''.join(random.choice(numbers) for _ in range(2))
+    license_plate += ''.join(random.choice(letters) for _ in range(3))
+    
+    return license_plate
+
+def check_for_violations(intersection_id):
+    """
+    Check for traffic violations based on current state
+    Returns the number of violations detected
+    """
+    violations_count = 0
+    with data_lock:
+        current_signal = traffic_signals.get(intersection_id)
+        vehicles = detected_vehicles.get(intersection_id, [])
+        
+        # Store violations
+        for vehicle in vehicles:
+            violation_type = None
+            
+            # Red light violation (simulated for demonstration)
+            if current_signal == "red" and random.random() < 0.2:  # 20% chance
+                violation_type = "red_light"
+                
+            # Speeding violation (simulated for demonstration)  
+            elif random.random() < 0.1:  # 10% chance
+                violation_type = "speeding"
+            
+            if violation_type:
+                violations_count += 1
+                violation_data = {
+                    "vehicleNumber": vehicle.get("license_plate", "Unknown"),
+                    "type": violation_type,
+                    "timestamp": datetime.now().isoformat(),
+                    "location": "Main Street Intersection",
+                    "details": f"{violation_type.replace('_', ' ').title()} violation by {vehicle.get('type')}",
+                    "imageUrl": f"https://example.com/violations/{violation_type}_{random.randint(1, 10)}.jpg"  # Fake URL for demo
+                }
+                
+                # Store in MongoDB if available
+                if db is not None:
+                    try:
+                        result = violations_collection.insert_one(violation_data)
+                        print(f"Violation recorded in database with ID: {result.inserted_id}")
+                    except Exception as e:
+                        print(f"Error saving violation to database: {e}")
+    
+    return violations_count
 
 def generate_frames(fps_requested=1):
     """
@@ -393,7 +608,8 @@ def get_traffic_data():
                 "vehicleCount": data["vehicleCount"],
                 "hasEmergencyVehicle": data["hasEmergencyVehicle"],
                 "timestamp": data["timestamp"],
-                "status": traffic_signals[intersection_id]
+                "status": traffic_signals[intersection_id],
+                "autoMode": auto_control[intersection_id]["enabled"]
             })
     return jsonify(result)
 
@@ -410,10 +626,85 @@ def update_signal():
         return jsonify({"success": False, "error": "Invalid request parameters"}), 400
     
     with data_lock:
+        # Only allow manual changes if auto mode is disabled
+        if auto_control[intersection_id]["enabled"]:
+            return jsonify({"success": False, "error": "Cannot change signal manually while auto mode is enabled"}), 400
+            
         traffic_signals[intersection_id] = status
     
     print(f"Changing traffic signal at {intersection_id} to {status}")
     return jsonify({"success": True})
+
+@app.route('/api/traffic/auto_control', methods=['POST'])
+def toggle_auto_control():
+    """
+    Toggle automatic traffic signal control
+    """
+    data = request.json
+    intersection_id = data.get('intersectionId')
+    enabled = data.get('enabled')
+    
+    if not intersection_id or enabled is None:
+        return jsonify({"success": False, "error": "Invalid request parameters"}), 400
+    
+    with data_lock:
+        auto_control[intersection_id]["enabled"] = enabled
+        auto_control[intersection_id]["last_change_time"] = time.time()
+    
+    print(f"{'Enabling' if enabled else 'Disabling'} auto control for {intersection_id}")
+    return jsonify({"success": True})
+
+@app.route('/api/traffic/check_violations', methods=['POST'])
+def check_violations():
+    """
+    Check for traffic violations at a specific intersection
+    """
+    data = request.json
+    intersection_id = data.get('intersectionId')
+    
+    if not intersection_id:
+        return jsonify({"success": False, "error": "Invalid intersection ID"}), 400
+    
+    violations = check_for_violations(intersection_id)
+    
+    return jsonify({
+        "success": True,
+        "violations": violations
+    })
+
+@app.route('/api/traffic/violations', methods=['GET'])
+def get_violations():
+    """
+    Get all recorded traffic violations
+    """
+    if db is not None:
+        try:
+            # Get violations from MongoDB
+            cursor = violations_collection.find().sort("timestamp", -1).limit(50)
+            violations = []
+            
+            for doc in cursor:
+                doc["id"] = str(doc.pop("_id"))  # Convert ObjectId to string
+                violations.append(doc)
+                
+            return jsonify(violations)
+        except Exception as e:
+            print(f"Error retrieving violations: {e}")
+            return jsonify([])
+    else:
+        # Return simulated violations if no database
+        return jsonify([
+            {
+                "id": f"sim-violation-{i}",
+                "vehicleNumber": generate_random_license_plate(),
+                "type": random.choice(["red_light", "speeding", "other"]),
+                "timestamp": (datetime.now().replace(minute=datetime.now().minute-i)).isoformat(),
+                "location": "Main Street Intersection",
+                "details": "Simulated violation (no database connection)",
+                "imageUrl": None
+            }
+            for i in range(1, 6)
+        ])
 
 @app.route('/api/video_feed')
 def video_feed():

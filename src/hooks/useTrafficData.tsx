@@ -1,3 +1,4 @@
+
 import { useState, useEffect, useCallback } from "react";
 import { 
   fetchTrafficData, 
@@ -6,7 +7,8 @@ import {
   TrafficData,
   checkTrafficViolations,
   fetchViolations,
-  ViolationData
+  ViolationData,
+  toggleAutoMode
 } from "@/lib/api";
 
 // Define the intersection data structure
@@ -17,6 +19,7 @@ export interface Intersection {
   status: "red" | "yellow" | "green";
   emergency: boolean;
   lastUpdated: string;
+  autoMode?: boolean;
 }
 
 // Define the history data point structure
@@ -76,6 +79,7 @@ export const useTrafficData = () => {
           status: item.status || "red",
           emergency: item.hasEmergencyVehicle,
           lastUpdated: item.timestamp ? new Date(item.timestamp).toLocaleTimeString() : 'N/A',
+          autoMode: item.autoMode || false,
         }));
         
         setIntersections(updatedIntersections);
@@ -124,6 +128,29 @@ export const useTrafficData = () => {
     }
   }, []);
 
+  // Toggle automatic traffic signal control
+  const toggleAutoTrafficControl = useCallback(async (id: string, enabled: boolean) => {
+    try {
+      const success = await toggleAutoMode(id, enabled);
+      
+      if (success) {
+        // Optimistically update the UI
+        setIntersections(prev => 
+          prev.map(intersection => 
+            intersection.id === id 
+              ? { ...intersection, autoMode: enabled, lastUpdated: new Date().toLocaleTimeString() } 
+              : intersection
+          )
+        );
+      }
+      
+      return success;
+    } catch (err) {
+      console.error("Failed to toggle auto traffic control:", err);
+      return false;
+    }
+  }, []);
+
   // Check for traffic violations
   const checkViolations = useCallback(async () => {
     if (intersections.length === 0) return false;
@@ -167,5 +194,6 @@ export const useTrafficData = () => {
     loadingViolations,
     checkViolations,
     refreshViolations: loadViolations,
+    toggleAutoTrafficControl,
   };
 };
