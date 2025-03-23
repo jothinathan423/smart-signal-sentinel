@@ -23,11 +23,14 @@ const ViolationsList = ({ violations, isLoading }: ViolationsListProps) => {
   const [searchTerm, setSearchTerm] = useState("");
   const [expandedViolation, setExpandedViolation] = useState<string | null>(null);
   
-  // Filter violations based on search term
-  const filteredViolations = violations.filter((violation) => 
-    violation.vehicleNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    violation.type.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // Add console logs to debug
+  console.log("ViolationsList received:", { violations, isLoading });
+  
+  // Filter violations based on search term - safely handle undefined
+  const filteredViolations = Array.isArray(violations) ? violations.filter((violation) => 
+    violation?.vehicleNumber?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    violation?.type?.toLowerCase().includes(searchTerm.toLowerCase())
+  ) : [];
 
   const getViolationTypeLabel = (type: string) => {
     switch (type) {
@@ -85,7 +88,11 @@ const ViolationsList = ({ violations, isLoading }: ViolationsListProps) => {
           <div className="flex items-center justify-center p-4">
             <div className="animate-spin h-6 w-6 border-4 border-primary border-t-transparent rounded-full"></div>
           </div>
-        ) : filteredViolations.length === 0 ? (
+        ) : !Array.isArray(violations) ? (
+          <div className="text-center py-6 text-muted-foreground">
+            Error loading violations data
+          </div>
+        ) : violations.length === 0 ? (
           <div className="text-center py-6 text-muted-foreground">
             {searchTerm ? "No matching violations found" : "No violations recorded yet"}
           </div>
