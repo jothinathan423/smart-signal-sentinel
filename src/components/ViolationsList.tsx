@@ -35,6 +35,10 @@ const ViolationsList = ({ violations, isLoading }: ViolationsListProps) => {
         return "Red Light Violation";
       case "speeding":
         return "Speeding";
+      case "no_helmet":
+        return "No Helmet";
+      case "excess_passengers":
+        return "Excess Passengers";
       case "other":
         return "Other Violation";
       default:
@@ -48,6 +52,10 @@ const ViolationsList = ({ violations, isLoading }: ViolationsListProps) => {
         return "destructive";
       case "speeding":
         return "yellow";
+      case "no_helmet":
+        return "orange";
+      case "excess_passengers":
+        return "purple";
       case "other":
         return "default";
       default:

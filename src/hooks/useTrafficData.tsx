@@ -1,4 +1,3 @@
-
 import { useState, useEffect, useCallback } from "react";
 import { 
   fetchTrafficData, 
@@ -10,6 +9,7 @@ import {
   ViolationData,
   toggleAutoMode
 } from "@/lib/api";
+import { toast } from "sonner";
 
 // Define the intersection data structure
 export interface Intersection {
@@ -25,14 +25,13 @@ export interface Intersection {
 // Define the history data point structure
 export interface HistoryDataPoint {
   time: string;
-  int1Count: number;
-  int2Count: number;
+  [key: string]: string | number;
 }
 
 // Intersection names
 const intersectionNames = {
-  "int-001": "Main Street Intersection",
-  "int-002": "Park Avenue Intersection"
+  "int-001": "Main Street",
+  "int-002": "Park Avenue"
 };
 
 // Generate initial history data
@@ -46,8 +45,8 @@ const generateHistoryData = (): HistoryDataPoint[] => {
     
     data.push({
       time: time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      int1Count: Math.floor(Math.random() * 20) + 5,
-      int2Count: Math.floor(Math.random() * 20) + 5,
+      "Main Street": Math.floor(Math.random() * 20) + 5,
+      "Park Avenue": Math.floor(Math.random() * 20) + 5,
     });
   }
   
@@ -65,11 +64,19 @@ export const useTrafficData = () => {
   
   // Optimize camera URL with a timestamp-based approach
   useEffect(() => {
-    // Use the optimized camera URL function for each intersection
-    setCameraUrls({
-      "int-001": getCameraStreamUrl("int-001"),
-      "int-002": getCameraStreamUrl("int-002")
-    });
+    const updateCameraUrls = () => {
+      setCameraUrls({
+        "int-001": `${getCameraStreamUrl("int-001")}?t=${Date.now()}`,
+        "int-002": `${getCameraStreamUrl("int-002")}?t=${Date.now()}`
+      });
+    };
+    
+    updateCameraUrls();
+    
+    // Update camera URLs every 10 seconds to avoid caching
+    const cameraInterval = setInterval(updateCameraUrls, 10000);
+    
+    return () => clearInterval(cameraInterval);
   }, []);
 
   // Fetch traffic data from the backend
@@ -78,6 +85,11 @@ export const useTrafficData = () => {
       try {
         setLoading(true);
         const data = await fetchTrafficData();
+        
+        if (!data || data.length === 0) {
+          console.error("No data received from traffic API");
+          return;
+        }
         
         // Map API data to intersection objects
         const updatedIntersections = data.map(item => ({
@@ -94,15 +106,19 @@ export const useTrafficData = () => {
         
         // Update history with new data points
         setHistoryData(prev => {
-          const int1 = updatedIntersections.find(i => i.id === "int-001");
-          const int2 = updatedIntersections.find(i => i.id === "int-002");
-          
-          const newPoint = {
-            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            int1Count: int1 ? int1.vehicleCount : 0,
-            int2Count: int2 ? int2.vehicleCount : 0,
+          const newPoint: HistoryDataPoint = {
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
           };
           
+          // Add data for each intersection
+          updatedIntersections.forEach(intersection => {
+            const intersectionName = intersectionNames[intersection.id as keyof typeof intersectionNames];
+            if (intersectionName) {
+              newPoint[intersectionName] = intersection.vehicleCount;
+            }
+          });
+          
+          // Keep only the last 60 data points
           return [...prev.slice(1), newPoint];
         });
         
@@ -138,6 +154,7 @@ export const useTrafficData = () => {
       );
     } catch (err) {
       console.error("Failed to update traffic signal:", err);
+      toast.error("Failed to update traffic signal. Check connection.");
     }
   }, []);
 
@@ -155,40 +172,49 @@ export const useTrafficData = () => {
               : intersection
           )
         );
+        
+        toast.success(`Auto control ${enabled ? 'enabled' : 'disabled'} for ${intersectionNames[id as keyof typeof intersectionNames]}`);
       }
       
       return success;
     } catch (err) {
       console.error("Failed to toggle auto traffic control:", err);
+      toast.error("Failed to toggle auto mode. Check connection.");
       return false;
     }
   }, []);
 
   // Check for traffic violations
   const checkViolations = useCallback(async (intersectionId: string) => {
-    if (!intersectionId && intersections.length === 0) return false;
-    
-    // If no intersection specified, check the first one
-    const idToCheck = intersectionId || intersections[0].id;
-    
-    const result = await checkTrafficViolations(idToCheck);
-    
-    // Refresh violations list if violations were found
-    if (result) {
+    try {
+      if (!intersectionId) {
+        toast.error("Invalid intersection ID");
+        return false;
+      }
+      
+      toast.info("Checking for traffic violations...");
+      const result = await checkTrafficViolations(intersectionId);
+      
+      // Refresh violations list regardless of result
       await loadViolations();
+      
+      return result;
+    } catch (err) {
+      console.error("Error checking violations:", err);
+      toast.error("Failed to check violations. Check connection.");
+      return false;
     }
-    
-    return result;
-  }, [intersections]);
+  }, []);
 
   // Load traffic violations
   const loadViolations = useCallback(async () => {
     try {
       setLoadingViolations(true);
       const data = await fetchViolations();
-      setViolations(data);
+      setViolations(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error("Failed to fetch violations:", err);
+      toast.error("Failed to load violations data");
     } finally {
       setLoadingViolations(false);
     }
