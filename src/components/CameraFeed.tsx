@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AlertCircle, Camera } from "lucide-react";
@@ -32,7 +31,7 @@ const CameraFeed = ({ cameraUrl, title = "Traffic Camera", className }: CameraFe
       if (imgRef.current && !isLoading && !error) {
         // Add timestamp to URL to prevent caching
         const timestamp = new Date().getTime();
-        const refreshUrl = `${cameraUrl}?t=${timestamp}&fps=${frameRate}`;
+        const refreshUrl = `${cameraUrl}&t=${timestamp}`;
         imgRef.current.src = refreshUrl;
       }
     }, 1000 / frameRate); // Adjust refresh rate based on frameRate
@@ -51,7 +50,7 @@ const CameraFeed = ({ cameraUrl, title = "Traffic Camera", className }: CameraFe
     // Force reload with new timestamp
     if (imgRef.current) {
       const timestamp = new Date().getTime();
-      imgRef.current.src = `${cameraUrl}?t=${timestamp}&fps=${frameRate}`;
+      imgRef.current.src = `${cameraUrl}&t=${timestamp}`;
     }
   };
 
@@ -114,7 +113,7 @@ const CameraFeed = ({ cameraUrl, title = "Traffic Camera", className }: CameraFe
             </div>
             <img
               ref={imgRef}
-              src={`${cameraUrl}?t=${Date.now()}&fps=${frameRate}`}
+              src={`${cameraUrl}&t=${Date.now()}`}
               alt="Traffic Camera Feed"
               className="w-full h-auto"
               onLoad={() => setIsLoading(false)}

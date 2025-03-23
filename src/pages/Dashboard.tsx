@@ -266,7 +266,7 @@ const Dashboard = () => {
                     <h4 className="font-medium text-red-700 text-sm">Two-Wheeler Violations</h4>
                     <ul className="text-xs text-red-600 mt-1 space-y-1 list-disc pl-4">
                       <li>No helmet detection</li>
-                      <li>Multiple passengers (>2)</li>
+                      <li>Multiple passengers (&gt;2)</li>
                     </ul>
                   </div>
                   

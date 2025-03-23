@@ -25,11 +25,15 @@ export interface Intersection {
 // Define the history data point structure
 export interface HistoryDataPoint {
   time: string;
-  count: number;
+  int1Count: number;
+  int2Count: number;
 }
 
-// Single intersection name
-const intersectionName = "Main Street Intersection";
+// Intersection names
+const intersectionNames = {
+  "int-001": "Main Street Intersection",
+  "int-002": "Park Avenue Intersection"
+};
 
 // Generate initial history data
 const generateHistoryData = (): HistoryDataPoint[] => {
@@ -42,7 +46,8 @@ const generateHistoryData = (): HistoryDataPoint[] => {
     
     data.push({
       time: time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      count: Math.floor(Math.random() * 20) + 5,
+      int1Count: Math.floor(Math.random() * 20) + 5,
+      int2Count: Math.floor(Math.random() * 20) + 5,
     });
   }
   
@@ -54,14 +59,17 @@ export const useTrafficData = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [historyData, setHistoryData] = useState<HistoryDataPoint[]>(generateHistoryData());
-  const [cameraUrl, setCameraUrl] = useState<string>("");
+  const [cameraUrls, setCameraUrls] = useState<Record<string, string>>({});
   const [violations, setViolations] = useState<ViolationData[]>([]);
   const [loadingViolations, setLoadingViolations] = useState(false);
   
   // Optimize camera URL with a timestamp-based approach
   useEffect(() => {
-    // Use the optimized camera URL function
-    setCameraUrl(getCameraStreamUrl());
+    // Use the optimized camera URL function for each intersection
+    setCameraUrls({
+      "int-001": getCameraStreamUrl("int-001"),
+      "int-002": getCameraStreamUrl("int-002")
+    });
   }, []);
 
   // Fetch traffic data from the backend
@@ -71,10 +79,10 @@ export const useTrafficData = () => {
         setLoading(true);
         const data = await fetchTrafficData();
         
-        // Map API data to intersection objects - expect only one result
+        // Map API data to intersection objects
         const updatedIntersections = data.map(item => ({
           id: item.intersectionId,
-          name: intersectionName,
+          name: intersectionNames[item.intersectionId as keyof typeof intersectionNames] || "Unknown Intersection",
           vehicleCount: item.vehicleCount,
           status: item.status || "red",
           emergency: item.hasEmergencyVehicle,
@@ -84,12 +92,17 @@ export const useTrafficData = () => {
         
         setIntersections(updatedIntersections);
         
-        // Update history with a new data point
+        // Update history with new data points
         setHistoryData(prev => {
+          const int1 = updatedIntersections.find(i => i.id === "int-001");
+          const int2 = updatedIntersections.find(i => i.id === "int-002");
+          
           const newPoint = {
             time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            count: updatedIntersections.reduce((sum, int) => sum + int.vehicleCount, 0),
+            int1Count: int1 ? int1.vehicleCount : 0,
+            int2Count: int2 ? int2.vehicleCount : 0,
           };
+          
           return [...prev.slice(1), newPoint];
         });
         
@@ -152,10 +165,13 @@ export const useTrafficData = () => {
   }, []);
 
   // Check for traffic violations
-  const checkViolations = useCallback(async () => {
-    if (intersections.length === 0) return false;
+  const checkViolations = useCallback(async (intersectionId: string) => {
+    if (!intersectionId && intersections.length === 0) return false;
     
-    const result = await checkTrafficViolations(intersections[0].id);
+    // If no intersection specified, check the first one
+    const idToCheck = intersectionId || intersections[0].id;
+    
+    const result = await checkTrafficViolations(idToCheck);
     
     // Refresh violations list if violations were found
     if (result) {
@@ -189,7 +205,7 @@ export const useTrafficData = () => {
     loading,
     error,
     updateTrafficStatus,
-    cameraUrl,
+    cameraUrls,
     violations,
     loadingViolations,
     checkViolations,

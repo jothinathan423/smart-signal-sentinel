@@ -30,16 +30,37 @@ except Exception as e:
 # Store the latest traffic data
 traffic_data = {
     "int-001": {"vehicleCount": 0, "hasEmergencyVehicle": False, "timestamp": ""},
+    "int-002": {"vehicleCount": 0, "hasEmergencyVehicle": False, "timestamp": ""},
 }
 
 # Traffic signal status
 traffic_signals = {
     "int-001": "red",
+    "int-002": "green",
 }
 
 # Automatic control configuration
 auto_control = {
     "int-001": {
+        "enabled": False,
+        "last_change_time": time.time(),
+        "cycle_times": {
+            "red": 30,  # 30 seconds for red
+            "yellow": 5,  # 5 seconds for yellow
+            "green": 30,  # 30 seconds for green
+        },
+        "vehicle_thresholds": {
+            "low": 5,    # 0-5 vehicles
+            "medium": 15,  # 6-15 vehicles
+            "high": 99999  # >15 vehicles
+        },
+        "cycle_adjustments": {
+            "low": 0.7,     # Reduce times by 30%
+            "medium": 1.0,  # Normal times
+            "high": 1.3,    # Increase times by 30%
+        }
+    },
+    "int-002": {
         "enabled": False,
         "last_change_time": time.time(),
         "cycle_times": {
@@ -66,14 +87,23 @@ emergency_config = {
     "confidence_threshold": 0.5,  # Confidence threshold for detection
 }
 
+# Two-wheeler violation detection configuration
+two_wheeler_config = {
+    "confidence_threshold": 0.6,  # Confidence threshold for detection
+    "helmet_detection_threshold": 0.5,  # Confidence threshold for helmet detection
+    "person_count_threshold": 2  # Maximum allowed people on a two-wheeler
+}
+
 # Store detected vehicle information
 detected_vehicles = {
-    "int-001": []  # List to store vehicle data like position, speed, etc.
+    "int-001": [],  # List to store vehicle data like position, speed, etc.
+    "int-002": []   # List to store vehicle data for the second intersection
 }
 
 # Last stored vehicle positions for speed estimation
 last_vehicle_positions = {
-    "int-001": {}  # Dictionary of vehicle IDs to positions
+    "int-001": {},  # Dictionary of vehicle IDs to positions
+    "int-002": {}   # Dictionary of vehicle IDs to positions for the second intersection
 }
 
 # Vehicle ID counter
@@ -81,9 +111,15 @@ next_vehicle_id = 1
 
 # Lock for thread-safe access to shared data
 data_lock = threading.Lock()
-# Latest frame for video streaming
-latest_frame = None
-processed_frame = None  # Store the processed frame separately
+# Latest frames for video streaming
+latest_frames = {
+    "int-001": None,
+    "int-002": None
+}
+processed_frames = {
+    "int-001": None,
+    "int-002": None
+}  # Store the processed frames separately
 frame_lock = threading.Lock()
 
 # Frame processing configuration
@@ -94,6 +130,33 @@ frame_processing = {
     "max_width": 640,  # Maximum width for streaming
     "stream_fps": 15  # Target FPS for streaming
 }
+
+def coordinate_traffic_signals():
+    """
+    Coordinates traffic signals between intersections to optimize traffic flow
+    """
+    while True:
+        try:
+            with data_lock:
+                # If both intersections are in auto mode, coordinate their signals
+                if (auto_control["int-001"]["enabled"] and 
+                    auto_control["int-002"]["enabled"]):
+                    
+                    # Get current signals
+                    signal_1 = traffic_signals["int-001"]
+                    signal_2 = traffic_signals["int-002"]
+                    
+                    # If one is green, make sure the other is red (unless transitioning through yellow)
+                    if signal_1 == "green" and signal_2 != "yellow":
+                        traffic_signals["int-002"] = "red"
+                    elif signal_2 == "green" and signal_1 != "yellow":
+                        traffic_signals["int-001"] = "red"
+            
+            # Run at a reasonable interval
+            time.sleep(1)
+        except Exception as e:
+            print(f"Error in signal coordination: {e}")
+            time.sleep(1)
 
 def update_traffic_signal_automatic(intersection_id):
     """
@@ -143,12 +206,77 @@ def update_traffic_signal_automatic(intersection_id):
             
         print(f"Auto mode: Changed signal at {intersection_id} from {current_signal} to {new_signal} (Traffic: {traffic_level})")
 
-def detect_vehicles(video_source, intersection_id):
+        # If both intersections are in auto mode, coordinate the other intersection's signal
+        other_id = "int-002" if intersection_id == "int-001" else "int-001"
+        if auto_control[other_id]["enabled"]:
+            # Make sure the other signal is complementary
+            if new_signal == "green":
+                # If this signal is green, other should be red unless it's currently yellow
+                if traffic_signals[other_id] != "yellow":
+                    traffic_signals[other_id] = "red"
+                    print(f"Coordinated: Setting {other_id} to red")
+            elif new_signal == "red" and traffic_signals[other_id] == "red":
+                # Both shouldn't be red for too long (unless transitioning)
+                # If the other has been red longer, make it green
+                if time.time() - auto_control[other_id]["last_change_time"] > 5:
+                    traffic_signals[other_id] = "green"
+                    auto_control[other_id]["last_change_time"] = time.time()
+                    print(f"Coordinated: Setting {other_id} to green after mutual red period")
+
+def detect_helmet(person_roi, net, classes, output_layers):
+    """
+    Detect if a person is wearing a helmet
+    """
+    # Basic helmet detection using YOLO
+    height, width, _ = person_roi.shape
+    blob = cv2.dnn.blobFromImage(person_roi, 1/255.0, (416, 416), swapRB=True, crop=False)
+    net.setInput(blob)
+    outputs = net.forward(output_layers)
+    
+    # Look for helmet class or similar
+    for output in outputs:
+        for detection in output:
+            scores = detection[5:]
+            class_id = np.argmax(scores)
+            confidence = scores[class_id]
+            
+            if confidence > two_wheeler_config["helmet_detection_threshold"]:
+                # Check if class is a helmet or similar (helmet might not be in COCO dataset)
+                # We'll check for "helmet" in the class name or use a similar class like "cap"
+                if classes[class_id].lower() in ["helmet", "cap", "hat"]:
+                    return True
+    
+    return False
+
+def count_people_on_vehicle(vehicle_roi, net, classes, output_layers):
+    """
+    Count the number of people on a vehicle
+    """
+    height, width, _ = vehicle_roi.shape
+    blob = cv2.dnn.blobFromImage(vehicle_roi, 1/255.0, (416, 416), swapRB=True, crop=False)
+    net.setInput(blob)
+    outputs = net.forward(output_layers)
+    
+    person_count = 0
+    
+    for output in outputs:
+        for detection in output:
+            scores = detection[5:]
+            class_id = np.argmax(scores)
+            confidence = scores[class_id]
+            
+            if confidence > two_wheeler_config["confidence_threshold"]:
+                if classes[class_id] == "person":
+                    person_count += 1
+    
+    return person_count
+
+def detect_vehicles(camera_index, intersection_id):
     """
     Process video feed to count vehicles and detect emergency vehicles
     """
-    global latest_frame, processed_frame, next_vehicle_id
-    print(f"Starting vehicle detection for intersection {intersection_id} using laptop camera")
+    global latest_frames, processed_frames, next_vehicle_id
+    print(f"Starting vehicle detection for intersection {intersection_id} using camera index {camera_index}")
     
     # Load pre-trained vehicle detection model (using YOLO)
     try:
@@ -200,8 +328,8 @@ def detect_vehicles(video_source, intersection_id):
     
     while cap is None or not cap.isOpened():
         try:
-            print(f"Attempt {retry_count + 1}/{max_retries} to connect to laptop camera")
-            cap = cv2.VideoCapture(0)  # Use laptop camera (index 0)
+            print(f"Attempt {retry_count + 1}/{max_retries} to connect to camera {camera_index}")
+            cap = cv2.VideoCapture(camera_index)  # Use the camera index provided
             
             # Set camera properties for better performance
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
@@ -210,19 +338,19 @@ def detect_vehicles(video_source, intersection_id):
             cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))  # Use MJPG codec for better speed
             
             if not cap.isOpened():
-                print(f"Failed to open camera. Retrying...")
+                print(f"Failed to open camera {camera_index}. Retrying...")
                 time.sleep(1)
                 retry_count += 1
                 if retry_count >= max_retries:
-                    print(f"Could not open laptop camera after {max_retries} attempts")
-                    raise IOError(f"Could not open laptop camera")
+                    print(f"Could not open camera {camera_index} after {max_retries} attempts")
+                    raise IOError(f"Could not open camera {camera_index}")
                 continue
             
-            print(f"Successfully connected to laptop camera for {intersection_id}")
+            print(f"Successfully connected to camera {camera_index} for {intersection_id}")
             # Read a test frame to verify camera is working
             ret, test_frame = cap.read()
             if not ret or test_frame is None:
-                print("Camera opened but could not read frame. Retrying...")
+                print(f"Camera {camera_index} opened but could not read frame. Retrying...")
                 cap.release()
                 cap = None
                 retry_count += 1
@@ -230,33 +358,33 @@ def detect_vehicles(video_source, intersection_id):
                 continue
                 
         except Exception as e:
-            print(f"Error connecting to laptop camera: {e}")
+            print(f"Error connecting to camera {camera_index}: {e}")
             retry_count += 1
             time.sleep(1)
             if retry_count >= max_retries:
-                print(f"Giving up on laptop camera after {max_retries} attempts")
+                print(f"Giving up on camera {camera_index} after {max_retries} attempts")
                 # Update traffic data to indicate camera failure
                 with data_lock:
                     traffic_data[intersection_id] = {
                         "vehicleCount": 0,
                         "hasEmergencyVehicle": False,
                         "timestamp": datetime.now().isoformat(),
-                        "error": f"Failed to connect to laptop camera: {str(e)}"
+                        "error": f"Failed to connect to camera {camera_index}: {str(e)}"
                     }
                 # Keep trying periodically
                 while True:
                     time.sleep(10)
                     try:
-                        print(f"Periodic retry: Attempting to connect to laptop camera")
-                        cap = cv2.VideoCapture(0)
+                        print(f"Periodic retry: Attempting to connect to camera {camera_index}")
+                        cap = cv2.VideoCapture(camera_index)
                         if cap.isOpened():
-                            print(f"Successfully reconnected to laptop camera")
+                            print(f"Successfully reconnected to camera {camera_index}")
                             break
                         cap.release()
                     except Exception as retry_e:
                         print(f"Periodic retry failed: {retry_e}")
     
-    print(f"Starting main detection loop for {intersection_id}")
+    print(f"Starting main detection loop for {intersection_id} with camera {camera_index}")
     
     # Main processing loop
     frame_count = 0
@@ -277,18 +405,18 @@ def detect_vehicles(video_source, intersection_id):
             ret, frame = cap.read()
             
             if not ret or frame is None:
-                print(f"Error reading frame from laptop camera. Reconnecting...")
+                print(f"Error reading frame from camera {camera_index}. Reconnecting...")
                 cap.release()
                 time.sleep(1)
-                cap = cv2.VideoCapture(0)
+                cap = cv2.VideoCapture(camera_index)
                 if not cap.isOpened():
-                    print(f"Failed to reconnect to laptop camera")
+                    print(f"Failed to reconnect to camera {camera_index}")
                     time.sleep(5)  # Wait longer before retry
                 continue
             
             # Update the latest frame for video streaming (unprocessed)
             with frame_lock:
-                latest_frame = frame.copy()
+                latest_frames[intersection_id] = frame.copy()
             
             # Only process every nth frame to improve performance
             frame_count += 1
@@ -301,9 +429,10 @@ def detect_vehicles(video_source, intersection_id):
             
             # Always add timestamp and basic info to the frame
             current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            intersection_name = "Main Street Intersection" if intersection_id == "int-001" else "Park Avenue Intersection"
             cv2.putText(process_frame, f"Traffic Camera: {current_time}", (10, 30), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            cv2.putText(process_frame, "Main Street Intersection", (10, 60), 
+            cv2.putText(process_frame, intersection_name, (10, 60), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             
             # Add the current signal status
@@ -325,7 +454,7 @@ def detect_vehicles(video_source, intersection_id):
             
             # Update processed frame that will be used for streaming
             with frame_lock:
-                processed_frame = process_frame.copy()
+                processed_frames[intersection_id] = process_frame.copy()
             
             # Skip full processing if not needed this frame
             if not full_processing:
@@ -358,7 +487,7 @@ def detect_vehicles(video_source, intersection_id):
                     
                     if confidence > emergency_config["confidence_threshold"]:
                         # Check if the detected object is a vehicle
-                        if classes[class_id] in ["car", "truck", "bus", "motorcycle"]:
+                        if classes[class_id] in ["car", "truck", "bus", "motorcycle", "bicycle"]:
                             vehicle_count += 1
                             
                             # Get bounding box dimensions
@@ -426,9 +555,45 @@ def detect_vehicles(video_source, intersection_id):
                                         
                                         # Draw box around emergency vehicle in the processed frame
                                         with frame_lock:
-                                            cv2.rectangle(processed_frame, (x, y), (x + w, y + h), (0, 0, 255), 2)
-                                            cv2.putText(processed_frame, "EMERGENCY VEHICLE", (x, y - 10), 
+                                            cv2.rectangle(processed_frames[intersection_id], (x, y), (x + w, y + h), (0, 0, 255), 2)
+                                            cv2.putText(processed_frames[intersection_id], "EMERGENCY VEHICLE", (x, y - 10), 
                                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                            
+                            # Add two-wheeler detection with helmet and passenger violations
+                            helmet_violation = False
+                            passenger_violation = False
+                            
+                            if classes[class_id] in ["motorcycle", "bicycle"] and x >= 0 and y >= 0 and x+w < width and y+h < height:
+                                vehicle_roi = frame[y:y+h, x:x+w]
+                                
+                                # Count people on the bike
+                                person_count = count_people_on_vehicle(vehicle_roi, net, classes, output_layers)
+                                
+                                # Check if the count exceeds the limit
+                                if person_count > two_wheeler_config["person_count_threshold"]:
+                                    passenger_violation = True
+                                    print(f"Passenger violation detected: {person_count} people on two-wheeler")
+                                    
+                                    # Add to processed frame
+                                    with frame_lock:
+                                        cv2.putText(processed_frames[intersection_id], 
+                                                  f"VIOLATION: {person_count} PASSENGERS", 
+                                                  (x, y + h + 30), 
+                                                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                                
+                                # Check for helmet
+                                if person_count > 0:
+                                    has_helmet = detect_helmet(vehicle_roi, net, classes, output_layers)
+                                    if not has_helmet:
+                                        helmet_violation = True
+                                        print(f"Helmet violation detected on two-wheeler")
+                                        
+                                        # Add to processed frame
+                                        with frame_lock:
+                                            cv2.putText(processed_frames[intersection_id], 
+                                                      "VIOLATION: NO HELMET", 
+                                                      (x, y + h + 15), 
+                                                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
                             
                             # Store vehicle data
                             vehicle_data = {
@@ -437,21 +602,26 @@ def detect_vehicles(video_source, intersection_id):
                                 "position": vehicle_position,
                                 "size": (w, h),
                                 "is_emergency": is_emergency,
-                                "license_plate": generate_random_license_plate() if random.random() < 0.8 else None
+                                "license_plate": generate_random_license_plate() if random.random() < 0.8 else None,
+                                "helmet_violation": helmet_violation,
+                                "passenger_violation": passenger_violation
                             }
                             current_vehicles.append(vehicle_data)
                             
                             # Draw bounding box for each vehicle in the processed frame
                             with frame_lock:
                                 box_color = (0, 0, 255) if is_emergency else (255, 0, 0)
-                                cv2.rectangle(processed_frame, (x, y), (x + w, y + h), box_color, 2)
+                                if helmet_violation or passenger_violation:
+                                    box_color = (0, 165, 255)  # Orange for violations
+                                
+                                cv2.rectangle(processed_frames[intersection_id], (x, y), (x + w, y + h), box_color, 2)
                                 label = f"{classes[class_id]} {vehicle_id}"
-                                cv2.putText(processed_frame, label, (x, y - 5), 
+                                cv2.putText(processed_frames[intersection_id], label, (x, y - 5), 
                                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, box_color, 2)
                                 
                                 # Add license plate if available
                                 if vehicle_data["license_plate"]:
-                                    cv2.putText(processed_frame, vehicle_data["license_plate"], (x, y + h + 15), 
+                                    cv2.putText(processed_frames[intersection_id], vehicle_data["license_plate"], (x, y + h + 15), 
                                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
             
             # Update the detected vehicles list
@@ -465,6 +635,12 @@ def detect_vehicles(video_source, intersection_id):
                     traffic_signals[intersection_id] = "green"
                     auto_control[intersection_id]["last_change_time"] = time.time()
                     print(f"Emergency vehicle detected at {intersection_id}. Setting signal to green.")
+                    
+                    # Set the other intersection to red for emergency priority
+                    other_id = "int-002" if intersection_id == "int-001" else "int-001"
+                    if traffic_signals[other_id] != "yellow":  # Don't interrupt yellow phase
+                        traffic_signals[other_id] = "red"
+                        print(f"Setting {other_id} to red for emergency priority")
                     
                 traffic_data[intersection_id] = {
                     "vehicleCount": vehicle_count,
@@ -516,23 +692,36 @@ def check_for_violations(intersection_id):
         # Store violations
         for vehicle in vehicles:
             violation_type = None
+            details = ""
             
             # Red light violation (simulated for demonstration)
             if current_signal == "red" and random.random() < 0.2:  # 20% chance
                 violation_type = "red_light"
+                details = "Running a red light"
                 
             # Speeding violation (simulated for demonstration)  
             elif random.random() < 0.1:  # 10% chance
                 violation_type = "speeding"
+                details = "Exceeding speed limit"
+                
+            # Two-wheeler violations (actual detection)
+            elif vehicle.get("type") in ["motorcycle", "bicycle"]:
+                if vehicle.get("helmet_violation"):
+                    violation_type = "no_helmet"
+                    details = "Riding without helmet"
+                elif vehicle.get("passenger_violation"):
+                    violation_type = "excess_passengers"
+                    details = "Too many passengers on two-wheeler"
             
             if violation_type:
                 violations_count += 1
+                intersection_name = "Main Street Intersection" if intersection_id == "int-001" else "Park Avenue Intersection"
                 violation_data = {
                     "vehicleNumber": vehicle.get("license_plate", "Unknown"),
                     "type": violation_type,
                     "timestamp": datetime.now().isoformat(),
-                    "location": "Main Street Intersection",
-                    "details": f"{violation_type.replace('_', ' ').title()} violation by {vehicle.get('type')}",
+                    "location": intersection_name,
+                    "details": details,
                     "imageUrl": f"https://example.com/violations/{violation_type}_{random.randint(1, 10)}.jpg"  # Fake URL for demo
                 }
                 
@@ -546,11 +735,11 @@ def check_for_violations(intersection_id):
     
     return violations_count
 
-def generate_frames(fps_requested=1):
+def generate_frames(intersection_id, fps_requested=1):
     """
     Generator function for video streaming with adjustable quality
     """
-    global processed_frame
+    global processed_frames
     
     fps_limit = min(fps_requested, frame_processing["stream_fps"])
     interval = 1.0 / max(0.5, fps_limit)  # At least 0.5 FPS, but limit to requested FPS
@@ -567,14 +756,14 @@ def generate_frames(fps_requested=1):
         last_frame_time = current_time
         
         # Wait until we have a frame
-        if processed_frame is None:
+        if processed_frames.get(intersection_id) is None:
             time.sleep(0.1)
             continue
             
         # Use processed frame with annotations
         with frame_lock:
-            if processed_frame is not None:
-                frame = processed_frame.copy()
+            if processed_frames.get(intersection_id) is not None:
+                frame = processed_frames[intersection_id].copy()
             else:
                 continue
         
@@ -697,20 +886,23 @@ def get_violations():
             {
                 "id": f"sim-violation-{i}",
                 "vehicleNumber": generate_random_license_plate(),
-                "type": random.choice(["red_light", "speeding", "other"]),
+                "type": random.choice(["red_light", "speeding", "no_helmet", "excess_passengers"]),
                 "timestamp": (datetime.now().replace(minute=datetime.now().minute-i)).isoformat(),
-                "location": "Main Street Intersection",
+                "location": "Main Street Intersection" if i % 2 == 0 else "Park Avenue Intersection",
                 "details": "Simulated violation (no database connection)",
                 "imageUrl": None
             }
             for i in range(1, 6)
         ])
 
-@app.route('/api/video_feed')
-def video_feed():
+@app.route('/api/video_feed/<intersection_id>')
+def video_feed(intersection_id):
     """
     Video streaming route for the camera feed with quality parameter
     """
+    if intersection_id not in ["int-001", "int-002"]:
+        return "Invalid intersection ID", 400
+        
     # Get requested FPS from query parameter
     fps = request.args.get('fps', 1, type=float)
     # Update frame quality based on FPS (higher FPS = lower quality to maintain performance)
@@ -721,7 +913,7 @@ def video_feed():
     else:
         frame_processing["frame_quality"] = 65  # Lower quality for high FPS
     
-    return Response(generate_frames(fps),
+    return Response(generate_frames(intersection_id, fps),
                    mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/api/stream_status')
@@ -747,19 +939,30 @@ if __name__ == '__main__':
         print("2. yolov4.weights: https://github.com/AlexeyAB/darknet/releases/download/darknet_yolo_v3_optimal/yolov4.weights")
         print("3. coco.names: https://raw.githubusercontent.com/AlexeyAB/darknet/master/data/coco.names")
     
-    # Define the single intersection with laptop camera
-    intersection_id = "int-001"
-    
-    print("Starting traffic monitoring with laptop camera")
-    
-    # Start video processing in background thread
-    thread = threading.Thread(
-        target=detect_vehicles, 
-        args=(0, intersection_id),  # 0 is the index for laptop camera
+    # Start signal coordination thread
+    coord_thread = threading.Thread(
+        target=coordinate_traffic_signals,
         daemon=True
     )
-    thread.start()
-    print(f"Started detection thread for {intersection_id}")
+    coord_thread.start()
+    print("Started signal coordination thread")
+    
+    # Start video processing for each intersection in background threads
+    thread1 = threading.Thread(
+        target=detect_vehicles, 
+        args=(0, "int-001"),  # 0 is the index for laptop camera
+        daemon=True
+    )
+    thread1.start()
+    print(f"Started detection thread for int-001 with laptop camera (index 0)")
+    
+    thread2 = threading.Thread(
+        target=detect_vehicles, 
+        args=(1, "int-002"),  # 1 is the index for external webcam
+        daemon=True
+    )
+    thread2.start()
+    print(f"Started detection thread for int-002 with external webcam (index 1)")
     
     # Start the Flask app
     print("Starting Flask server on http://0.0.0.0:5000")

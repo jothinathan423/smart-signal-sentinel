@@ -14,7 +14,7 @@ export interface TrafficData {
 export interface ViolationData {
   id: string;
   vehicleNumber: string;
-  type: "red_light" | "speeding" | "other";
+  type: "red_light" | "speeding" | "no_helmet" | "excess_passengers" | "other";
   timestamp: string;
   location: string;
   details?: string;
@@ -108,8 +108,8 @@ export const toggleAutoMode = async (
 };
 
 // Get camera URL with appropriate parameters
-export const getCameraStreamUrl = (fps: number = 1): string => {
-  return `${API_BASE_URL}/api/video_feed?fps=${fps}`;
+export const getCameraStreamUrl = (intersectionId: string, fps: number = 1): string => {
+  return `${API_BASE_URL}/api/video_feed/${intersectionId}?fps=${fps}`;
 };
 
 // Trigger traffic violation check on the backend
