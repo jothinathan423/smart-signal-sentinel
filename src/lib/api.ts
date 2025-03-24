@@ -1,4 +1,3 @@
-
 // API interface for communicating with our Python backend
 import { toast } from "sonner";
 
@@ -27,7 +26,7 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 // Fetch traffic data from the backend
 export const fetchTrafficData = async (): Promise<TrafficData[]> => {
   try {
-    console.log('Fetching traffic data from:', `${API_BASE_URL}/api/traffic`);
+    console.log('Attempting to connect to traffic backend at:', `${API_BASE_URL}/api/traffic`);
     const response = await fetch(`${API_BASE_URL}/api/traffic`);
     
     if (!response.ok) {
@@ -35,11 +34,11 @@ export const fetchTrafficData = async (): Promise<TrafficData[]> => {
     }
     
     const data = await response.json();
-    console.log('Received traffic data:', data);
+    console.log('Successfully received traffic data:', data);
     return data;
   } catch (error) {
     console.error("Error fetching traffic data:", error);
-    toast.error("Failed to fetch traffic data. Make sure the backend server is running.");
+    toast.error("Failed to connect to traffic management system. Please ensure the Python backend is running on port 5000.");
     return [];
   }
 };
@@ -80,7 +79,7 @@ export const toggleAutoMode = async (
   enabled: boolean
 ): Promise<boolean> => {
   try {
-    console.log(`Setting auto control mode for ${intersectionId} to ${enabled ? 'enabled' : 'disabled'}`);
+    console.log(`Attempting to ${enabled ? 'enable' : 'disable'} auto control for ${intersectionId}`);
     const response = await fetch(`${API_BASE_URL}/api/traffic/auto_control`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -97,12 +96,11 @@ export const toggleAutoMode = async (
       toast.success(`Auto control mode ${enabled ? 'enabled' : 'disabled'}`);
       return true;
     } else {
-      toast.error(result.error || "Failed to update auto control mode");
-      return false;
+      throw new Error(result.error || "Failed to update auto control mode");
     }
   } catch (error) {
     console.error("Error toggling auto control mode:", error);
-    toast.error("Failed to toggle auto control. Check backend connection.");
+    toast.error("Could not toggle auto control. Is the backend server running?");
     return false;
   }
 };
@@ -112,10 +110,10 @@ export const getCameraStreamUrl = (intersectionId: string, fps: number = 1): str
   return `${API_BASE_URL}/api/video_feed/${intersectionId}?fps=${fps}`;
 };
 
-// Trigger traffic violation check on the backend
+// Enhanced violation checking with better error handling
 export const checkTrafficViolations = async (intersectionId: string): Promise<boolean> => {
   try {
-    console.log(`Checking for traffic violations at intersection ${intersectionId}`);
+    console.log(`Checking for violations at intersection ${intersectionId}`);
     const response = await fetch(`${API_BASE_URL}/api/traffic/check_violations`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -130,26 +128,25 @@ export const checkTrafficViolations = async (intersectionId: string): Promise<bo
     
     if (result.success) {
       if (result.violations > 0) {
-        toast.success(`Detected ${result.violations} traffic violation(s)!`);
+        toast.success(`Detected ${result.violations} violation(s)!`);
       } else {
-        toast.info("No traffic violations detected.");
+        toast.info("No violations detected in the current frame.");
       }
       return result.violations > 0;
     } else {
-      toast.error(result.error || "Failed to check for traffic violations");
-      return false;
+      throw new Error(result.error || "Failed to check for violations");
     }
   } catch (error) {
-    console.error("Error checking traffic violations:", error);
-    toast.error("Failed to check for violations. Check backend connection.");
+    console.error("Error checking violations:", error);
+    toast.error("Could not check for violations. Is the backend server running?");
     return false;
   }
 };
 
-// Fetch recent traffic violations
+// Enhanced violations fetch with better error handling
 export const fetchViolations = async (): Promise<ViolationData[]> => {
   try {
-    console.log('Fetching traffic violations from:', `${API_BASE_URL}/api/traffic/violations`);
+    console.log('Fetching violations data');
     const response = await fetch(`${API_BASE_URL}/api/traffic/violations`);
     
     if (!response.ok) {
@@ -157,11 +154,11 @@ export const fetchViolations = async (): Promise<ViolationData[]> => {
     }
     
     const data = await response.json();
-    console.log('Received violation data:', data);
-    return data;
+    console.log('Successfully received violations data:', data);
+    return Array.isArray(data) ? data : [];
   } catch (error) {
-    console.error("Error fetching traffic violations:", error);
-    toast.error("Failed to fetch violation data. Make sure the backend server is running.");
+    console.error("Error fetching violations:", error);
+    toast.error("Could not fetch violation data. Is the backend server running?");
     return [];
   }
 };
