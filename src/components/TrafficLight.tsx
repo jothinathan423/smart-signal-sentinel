@@ -25,6 +25,9 @@ const TrafficLight = ({ status, emergency, className }: TrafficLightProps) => {
     }
   }, [status, prevStatus]);
 
+  // Debug log to check if emergency state is being properly passed
+  console.log(`TrafficLight: status=${status}, emergency=${emergency}`);
+
   return (
     <div className={cn("flex flex-col gap-4 p-4 rounded-xl glass", className)}>
       <div className="text-xs uppercase tracking-wider font-medium text-muted-foreground">

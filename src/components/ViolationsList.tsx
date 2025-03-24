@@ -1,5 +1,5 @@
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { ViolationData } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { 
@@ -8,11 +8,13 @@ import {
   Clock, 
   MapPin,
   Search,
-  Info
+  Info,
+  Filter
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 interface ViolationsListProps {
   violations: ViolationData[];
@@ -22,15 +24,31 @@ interface ViolationsListProps {
 const ViolationsList = ({ violations, isLoading }: ViolationsListProps) => {
   const [searchTerm, setSearchTerm] = useState("");
   const [expandedViolation, setExpandedViolation] = useState<string | null>(null);
+  const [filterType, setFilterType] = useState<string>("all");
   
   // Add console logs to debug
-  console.log("ViolationsList received:", { violations, isLoading });
+  console.log("ViolationsList received:", { violations, isLoading, violationsLength: violations?.length });
   
-  // Filter violations based on search term - safely handle undefined
-  const filteredViolations = Array.isArray(violations) ? violations.filter((violation) => 
-    violation?.vehicleNumber?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    violation?.type?.toLowerCase().includes(searchTerm.toLowerCase())
-  ) : [];
+  // Filter violations based on search term and type filter - safely handle undefined
+  const filteredViolations = Array.isArray(violations) ? violations.filter((violation) => {
+    // First check if the violation exists and has required properties
+    if (!violation || !violation.vehicleNumber || !violation.type) {
+      console.log("Invalid violation data:", violation);
+      return false;
+    }
+    
+    // Apply search filter
+    const matchesSearch = 
+      violation.vehicleNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      violation.type.toLowerCase().includes(searchTerm.toLowerCase());
+    
+    // Apply type filter
+    const matchesType = filterType === "all" || violation.type === filterType;
+    
+    return matchesSearch && matchesType;
+  }) : [];
+  
+  console.log("Filtered violations:", filteredViolations.length);
 
   const getViolationTypeLabel = (type: string) => {
     switch (type) {
@@ -73,14 +91,32 @@ const ViolationsList = ({ violations, isLoading }: ViolationsListProps) => {
           <AlertTriangle className="h-5 w-5 text-destructive" />
           Traffic Violations
         </CardTitle>
-        <div className="relative">
-          <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Search by vehicle number or type..."
-            className="pl-8"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
+        <div className="flex flex-col sm:flex-row gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search by vehicle number or type..."
+              className="pl-8"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+          <Select value={filterType} onValueChange={setFilterType}>
+            <SelectTrigger className="w-full sm:w-[180px]">
+              <div className="flex items-center">
+                <Filter className="h-4 w-4 mr-2" />
+                <SelectValue placeholder="Filter by type" />
+              </div>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Violations</SelectItem>
+              <SelectItem value="red_light">Red Light</SelectItem>
+              <SelectItem value="speeding">Speeding</SelectItem>
+              <SelectItem value="no_helmet">No Helmet</SelectItem>
+              <SelectItem value="excess_passengers">Excess Passengers</SelectItem>
+              <SelectItem value="other">Other</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </CardHeader>
       <CardContent className="px-2">
@@ -95,6 +131,10 @@ const ViolationsList = ({ violations, isLoading }: ViolationsListProps) => {
         ) : violations.length === 0 ? (
           <div className="text-center py-6 text-muted-foreground">
             {searchTerm ? "No matching violations found" : "No violations recorded yet"}
+          </div>
+        ) : filteredViolations.length === 0 ? (
+          <div className="text-center py-6 text-muted-foreground">
+            No violations match your search criteria
           </div>
         ) : (
           <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
@@ -143,6 +183,11 @@ const ViolationsList = ({ violations, isLoading }: ViolationsListProps) => {
                           src={violation.imageUrl} 
                           alt="Violation evidence" 
                           className="w-full h-auto mt-2 rounded border border-border"
+                          onError={(e) => {
+                            // Handle broken image URLs
+                            const target = e.target as HTMLImageElement;
+                            target.style.display = 'none';
+                          }}
                         />
                       )}
                     </div>
