@@ -1267,6 +1267,65 @@ def stream_status():
         "last_processed": time.time() - frame_processing["last_full_process_time"]
     })
 
+# Camera configuration storage
+camera_configs = {
+    "int-001": {"camera_source": "0", "camera_type": "usb", "status": "active"},
+    "int-002": {"camera_source": "1", "camera_type": "usb", "status": "active"},
+}
+
+@app.route('/api/traffic/configure_camera', methods=['POST'])
+def configure_camera():
+    """Configure camera source for an intersection"""
+    data = request.json
+    intersection_id = data.get('intersectionId')
+    camera_source = data.get('cameraSource')
+    camera_type = data.get('cameraType', 'usb')
+    
+    if not intersection_id or camera_source is None:
+        return jsonify({"success": False, "error": "Invalid parameters"}), 400
+    
+    if intersection_id not in camera_configs:
+        return jsonify({"success": False, "error": "Unknown intersection"}), 400
+    
+    camera_configs[intersection_id] = {
+        "camera_source": camera_source,
+        "camera_type": camera_type,
+        "status": "configured"
+    }
+    
+    print(f"Camera configured for {intersection_id}: {camera_type} - {camera_source}")
+    return jsonify({"success": True, "message": f"Camera configured. Restart backend to apply changes."})
+
+@app.route('/api/traffic/cameras', methods=['GET'])
+def get_camera_configs():
+    """Get current camera configurations"""
+    result = []
+    for int_id, config in camera_configs.items():
+        result.append({
+            "intersection_id": int_id,
+            "camera_source": config["camera_source"],
+            "camera_type": config["camera_type"],
+            "status": config["status"]
+        })
+    return jsonify(result)
+
+@app.route('/api/traffic/congestion', methods=['GET'])
+def get_congestion():
+    """Get congestion summary for all intersections"""
+    result = {}
+    for intersection_id in ["int-001", "int-002"]:
+        count = traffic_data[intersection_id].get("vehicleCount", 0)
+        level = "high" if count > 15 else "medium" if count > 8 else "low"
+        pred = traffic_predictions[intersection_id]
+        result[intersection_id] = {
+            "vehicle_count": count,
+            "congestion_level": level,
+            "trend": pred.get("trend", "stable"),
+            "confidence": pred.get("confidence", 0),
+            "is_peak_hour": pred.get("is_peak_hour", False)
+        }
+    return jsonify(result)
+
 if __name__ == '__main__':
     yolo_dir = os.path.join(os.path.dirname(__file__), 'yolo')
     if not os.path.exists(yolo_dir):

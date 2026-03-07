@@ -5,6 +5,7 @@ import Intersection from "@/components/Intersection";
 import TrafficGraph from "@/components/TrafficGraph";
 import CameraFeed from "@/components/CameraFeed";
 import ViolationsList from "@/components/ViolationsList";
+import CongestionIndicator from "@/components/CongestionIndicator";
 import { useTrafficData } from "@/hooks/useTrafficData";
 import { Button } from "@/components/ui/button";
 import { RefreshCw, AlertTriangle, FileWarning, Scan, Camera, ArrowLeftRight } from "lucide-react";
@@ -32,7 +33,6 @@ const Dashboard = () => {
   const [activeIntersection, setActiveIntersection] = useState<string>("int-001");
   const [viewMode, setViewMode] = useState<"split" | "single">("split");
   
-  // Check if any intersection has an emergency
   const hasEmergency = intersections.some(int => int.emergency);
 
   const handleCheckViolations = async (intersectionId: string) => {
@@ -48,14 +48,12 @@ const Dashboard = () => {
     await toggleAutoTrafficControl(id, enabled);
   };
 
-  // Create data for graph
   const graphData = historyData.map(point => ({
     time: point.time,
-    "Main Street": point.int1Count,
-    "Park Avenue": point.int2Count
+    "Main Street": point["Main Street"] || 0,
+    "Park Avenue": point["Park Avenue"] || 0,
   }));
   
-  // Get intersection objects
   const intersection1 = intersections.find(int => int.id === "int-001");
   const intersection2 = intersections.find(int => int.id === "int-002");
 
@@ -98,8 +96,20 @@ const Dashboard = () => {
             </div>
           )}
 
+          {/* Congestion Summary */}
+          {intersections.length > 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {intersections.map(int => (
+                <CongestionIndicator
+                  key={int.id}
+                  vehicleCount={int.vehicleCount}
+                />
+              ))}
+            </div>
+          )}
+
           {/* Toggle for view mode */}
-          <div className="flex justify-end mb-4">
+          <div className="flex justify-end">
             <Button 
               variant="outline" 
               size="sm" 
@@ -259,28 +269,32 @@ const Dashboard = () => {
             <div className="lg:col-span-1">
               <Card>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm">Detection Parameters</CardTitle>
+                  <CardTitle className="text-sm">System Status</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                  <div className="p-3 bg-red-50 rounded-lg border border-red-100">
-                    <h4 className="font-medium text-red-700 text-sm">Two-Wheeler Violations</h4>
-                    <ul className="text-xs text-red-600 mt-1 space-y-1 list-disc pl-4">
-                      <li>No helmet detection</li>
-                      <li>Multiple passengers (&gt;2)</li>
-                    </ul>
-                  </div>
-                  
-                  <div className="p-3 bg-amber-50 rounded-lg border border-amber-100">
-                    <h4 className="font-medium text-amber-700 text-sm">Traffic Violations</h4>
-                    <ul className="text-xs text-amber-600 mt-1 space-y-1 list-disc pl-4">
-                      <li>Red light running</li>
+                  <div className="p-3 rounded-lg bg-destructive/5 border border-destructive/10">
+                    <h4 className="font-medium text-destructive text-sm">Violation Detection</h4>
+                    <ul className="text-xs text-muted-foreground mt-1 space-y-1 list-disc pl-4">
+                      <li>Red light crossing</li>
                       <li>Speeding detection</li>
+                      <li>No helmet (AI vision)</li>
+                      <li>Excess passengers</li>
                     </ul>
                   </div>
                   
-                  <div className="p-3 bg-blue-50 rounded-lg border border-blue-100">
-                    <h4 className="font-medium text-blue-700 text-sm">Coordination Logic</h4>
-                    <p className="text-xs text-blue-600 mt-1">
+                  <div className="p-3 rounded-lg bg-primary/5 border border-primary/10">
+                    <h4 className="font-medium text-primary text-sm">AI Features</h4>
+                    <ul className="text-xs text-muted-foreground mt-1 space-y-1 list-disc pl-4">
+                      <li>YOLO vehicle detection</li>
+                      <li>Online pattern learning</li>
+                      <li>Predictive signal timing</li>
+                      <li>Speed tracking</li>
+                    </ul>
+                  </div>
+                  
+                  <div className="p-3 rounded-lg bg-accent border border-border">
+                    <h4 className="font-medium text-sm">Coordination</h4>
+                    <p className="text-xs text-muted-foreground mt-1">
                       {intersection1?.autoMode && intersection2?.autoMode
                         ? "Both intersections in auto-coordination mode"
                         : intersection1?.autoMode || intersection2?.autoMode
@@ -311,12 +325,15 @@ const Dashboard = () => {
           <div className="lg:col-span-2">
             <div className="flex flex-col gap-4">
               {intersection ? (
-                <Intersection
-                  key={intersection.id}
-                  {...intersection}
-                  onStatusChange={updateTrafficStatus}
-                  onAutoModeChange={handleAutoModeChange}
-                />
+                <>
+                  <Intersection
+                    key={intersection.id}
+                    {...intersection}
+                    onStatusChange={updateTrafficStatus}
+                    onAutoModeChange={handleAutoModeChange}
+                  />
+                  <CongestionIndicator vehicleCount={intersection.vehicleCount} />
+                </>
               ) : !loading ? (
                 <div className="flex flex-col items-center justify-center py-12 bg-muted/20 rounded-xl">
                   <div className="bg-muted p-4 rounded-full mb-4">
@@ -324,7 +341,7 @@ const Dashboard = () => {
                   </div>
                   <h3 className="text-lg font-medium">No Traffic Data</h3>
                   <p className="text-muted-foreground text-center max-w-md mt-2">
-                    There is no traffic data available for this intersection. Please ensure the backend server is running and camera is accessible.
+                    No traffic data available. Please ensure the backend server is running and camera is accessible.
                   </p>
                 </div>
               ) : (

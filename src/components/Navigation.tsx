@@ -2,7 +2,7 @@
 import React from "react";
 import { Link, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
-import { Home, BarChart, Info, Menu, X } from "lucide-react";
+import { Home, BarChart, Info, Menu, LineChart, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 
@@ -11,26 +11,15 @@ const Navigation = () => {
   const [open, setOpen] = React.useState(false);
 
   const routes = [
-    {
-      name: "Home",
-      path: "/",
-      icon: <Home className="h-5 w-5" />,
-    },
-    {
-      name: "Dashboard",
-      path: "/dashboard",
-      icon: <BarChart className="h-5 w-5" />,
-    },
-    {
-      name: "About",
-      path: "/about",
-      icon: <Info className="h-5 w-5" />,
-    },
+    { name: "Home", path: "/", icon: <Home className="h-5 w-5" /> },
+    { name: "Dashboard", path: "/dashboard", icon: <BarChart className="h-5 w-5" /> },
+    { name: "Analytics", path: "/analytics", icon: <LineChart className="h-5 w-5" /> },
+    { name: "Settings", path: "/settings", icon: <Settings className="h-5 w-5" /> },
+    { name: "About", path: "/about", icon: <Info className="h-5 w-5" /> },
   ];
 
   const NavLink = ({ route }: { route: typeof routes[0] }) => {
     const isActive = location.pathname === route.path;
-
     return (
       <Link
         to={route.path}
@@ -91,7 +80,7 @@ const Navigation = () => {
 
         <div>
           <Button size="sm" variant="outline" className="hidden md:flex">
-            Version 1.0
+            Version 2.0
           </Button>
         </div>
       </div>
