@@ -12,10 +12,10 @@ const About = () => {
       icon: <Camera className="h-5 w-5" />,
       title: "Traffic Density Detection",
       items: [
-        "YOLO-based real-time vehicle detection from camera feeds",
+        "YOLOv11-based real-time vehicle detection from camera feeds",
         "Vehicle counting and classification (car, truck, bus, motorcycle)",
-        "Multi-camera support (USB, IP camera, RTSP streams)",
-        "Traffic data sent to central controller in real-time",
+        "PCE (Passenger Car Equivalent) weighted density estimation",
+        "Dynamic multi-camera support with add/remove at runtime",
       ],
     },
     {
@@ -116,7 +116,7 @@ const About = () => {
           <div>
             <h1 className="text-3xl font-bold tracking-tight">About the System</h1>
             <p className="text-muted-foreground mt-2">
-              Centralized AI-Based Traffic Management System
+              Centralized AI-Based Smart Traffic Management System Using YOLO with Online and Continual Learning
             </p>
           </div>
           
@@ -125,12 +125,13 @@ const About = () => {
           <div className="space-y-4">
             <h2 className="text-2xl font-semibold">Overview</h2>
             <p className="text-muted-foreground leading-relaxed">
-              This system implements a centralized AI-based traffic management architecture where live video streams 
-              from multiple intersections are transmitted to a central control unit. It uses YOLO deep learning for 
-              real-time vehicle detection, integrates Online and Continual Learning for adaptive pattern recognition, 
-              dynamically adjusts signal timings, detects emergency vehicles for green corridor creation, and identifies 
-              traffic violations using AI-based video analysis. A centralized MongoDB database stores all data for 
-              real-time monitoring and long-term traffic analysis.
+              This system implements a Centralized AI-Based Smart Traffic Management architecture where live video
+              streams from multiple intersections are transmitted to a central control unit. It uses YOLOv11 deep learning
+              for real-time vehicle detection with PCE-weighted density estimation, integrates Online and Continual Learning
+              for adaptive pattern recognition, dynamically adjusts signal timings based on traffic density, detects
+              emergency vehicles for automatic green corridor creation, and identifies traffic violations using AI-based
+              video analysis. A centralized MongoDB database stores all data for real-time monitoring and long-term
+              traffic analysis.
             </p>
           </div>
 
@@ -223,7 +224,7 @@ const About = () => {
               {[
                 { name: "React + TypeScript", desc: "Frontend" },
                 { name: "Python + Flask", desc: "Backend" },
-                { name: "YOLOv4", desc: "Detection" },
+                { name: "YOLOv11", desc: "Detection" },
                 { name: "MongoDB", desc: "Database" },
                 { name: "OpenCV", desc: "Vision" },
                 { name: "Recharts", desc: "Visualization" },
@@ -243,7 +244,7 @@ const About = () => {
       <footer className="border-t py-6 md:py-0">
         <div className="container flex flex-col items-center justify-between gap-4 md:h-24 md:flex-row">
           <p className="text-center text-sm leading-loose text-muted-foreground md:text-left">
-            © 2024 Smart Traffic Management System. All rights reserved.
+            © 2025 Centralized AI-Based Smart Traffic Management System. All rights reserved.
           </p>
         </div>
       </footer>

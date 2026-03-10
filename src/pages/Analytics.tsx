@@ -5,29 +5,47 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { RefreshCw, TrendingUp, Clock, Gauge, Brain, Download, BarChart3, Activity } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Legend, PieChart, Pie, Cell } from "recharts";
-import { fetchTrafficPatterns, fetchSpeedData, fetchLearningLogs, TrafficPatternData, SpeedData, LearningLog } from "@/lib/api";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from "recharts";
+import { fetchTrafficPatterns, fetchSpeedData, fetchLearningLogs, fetchIntersections, TrafficPatternData, SpeedData, LearningLog, IntersectionInfo } from "@/lib/api";
 import { toast } from "sonner";
 
-const COLORS = ["hsl(210, 100%, 50%)", "hsl(200, 100%, 50%)", "hsl(150, 70%, 45%)", "hsl(40, 90%, 55%)"];
+const COLORS = ["hsl(210, 100%, 50%)", "hsl(200, 100%, 50%)", "hsl(150, 70%, 45%)", "hsl(40, 90%, 55%)", "hsl(280, 70%, 50%)", "hsl(350, 80%, 55%)"];
 
 const Analytics = () => {
   const [patterns, setPatterns] = useState<TrafficPatternData | null>(null);
   const [speedData, setSpeedData] = useState<SpeedData | null>(null);
   const [learningLogs, setLearningLogs] = useState<LearningLog[]>([]);
+  const [intersections, setIntersections] = useState<IntersectionInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("patterns");
 
+  // Build a map of intersection ID -> name
+  const nameMap: Record<string, string> = {};
+  intersections.forEach((int) => {
+    nameMap[int.id] = int.name;
+  });
+
+  const getIntName = (id: string) => nameMap[id] || id;
+  const getShortName = (id: string) => {
+    const name = getIntName(id);
+    // Shorten for cards: take first word + abbreviate
+    const words = name.split(" ");
+    if (words.length >= 2) return `${words[0]} ${words[1].slice(0, 3)}`;
+    return name.slice(0, 12);
+  };
+
   const loadData = useCallback(async () => {
     setLoading(true);
-    const [p, s, l] = await Promise.all([
+    const [p, s, l, ints] = await Promise.all([
       fetchTrafficPatterns(),
       fetchSpeedData(),
       fetchLearningLogs(),
+      fetchIntersections(),
     ]);
     setPatterns(p);
     setSpeedData(s);
     setLearningLogs(l);
+    setIntersections(ints);
     setLoading(false);
   }, []);
 
@@ -37,7 +55,7 @@ const Analytics = () => {
     return () => clearInterval(interval);
   }, [loadData]);
 
-  // Transform pattern data for hourly chart
+  // Transform pattern data for hourly chart - dynamic intersections
   const getHourlyChartData = () => {
     if (!patterns) return [];
     const data = [];
@@ -46,22 +64,21 @@ const Analytics = () => {
         hour: `${h.toString().padStart(2, "0")}:00`,
       };
       for (const [id, intData] of Object.entries(patterns)) {
-        const name = id === "int-001" ? "Main Street" : "Park Avenue";
+        const name = getIntName(id);
         const hourData = intData.patterns[h.toString()];
         point[name] = hourData ? Math.round(hourData.avg_count * 10) / 10 : 0;
-        point[`${name}_peak`] = hourData?.peak_detected || false;
       }
       data.push(point);
     }
     return data;
   };
 
-  // Get peak hours
+  // Get peak hours - dynamic
   const getPeakHours = () => {
     if (!patterns) return [];
     const peaks: { intersection: string; hour: number; avgCount: number }[] = [];
     for (const [id, intData] of Object.entries(patterns)) {
-      const name = id === "int-001" ? "Main Street" : "Park Avenue";
+      const name = getIntName(id);
       for (const [hour, data] of Object.entries(intData.patterns)) {
         if (data.peak_detected) {
           peaks.push({ intersection: name, hour: parseInt(hour), avgCount: Math.round(data.avg_count * 10) / 10 });
@@ -71,12 +88,12 @@ const Analytics = () => {
     return peaks;
   };
 
-  // Get violation type distribution from learning logs
-  const getViolationDistribution = () => {
+  // Get learning activity distribution - dynamic
+  const getLearningDistribution = () => {
     const dist: Record<string, number> = {};
     learningLogs.forEach((log) => {
       if (log.event_type === "pattern_update") {
-        const key = log.intersection_id === "int-001" ? "Main Street" : "Park Avenue";
+        const key = getIntName(log.intersection_id);
         dist[key] = (dist[key] || 0) + 1;
       }
     });
@@ -103,6 +120,7 @@ const Analytics = () => {
 
   const hourlyData = getHourlyChartData();
   const peakHours = getPeakHours();
+  const intersectionIds = patterns ? Object.keys(patterns) : [];
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -112,7 +130,7 @@ const Analytics = () => {
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
               <h1 className="text-3xl font-bold tracking-tight">Traffic Analytics</h1>
-              <p className="text-muted-foreground">Data analysis, patterns, and reports</p>
+              <p className="text-muted-foreground">AI-powered data analysis, patterns, and predictions</p>
             </div>
             <div className="flex gap-2">
               <Button variant="outline" size="sm" onClick={loadData} disabled={loading}>
@@ -126,11 +144,14 @@ const Analytics = () => {
             </div>
           </div>
 
-          {/* Summary Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* Predictions */}
-            {patterns && Object.entries(patterns).map(([id, data]) => {
-              const name = id === "int-001" ? "Main St" : "Park Ave";
+          {/* Summary Cards - dynamic */}
+          <div className={`grid gap-4 ${
+            intersectionIds.length <= 2 ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4' :
+            'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'
+          }`}>
+            {patterns && intersectionIds.map((id) => {
+              const data = patterns[id];
+              const name = getShortName(id);
               const pred = data.predictions;
               return (
                 <Card key={id}>
@@ -158,9 +179,10 @@ const Analytics = () => {
               );
             })}
 
-            {/* Speed Stats */}
-            {speedData && Object.entries(speedData).map(([id, data]) => {
-              const name = id === "int-001" ? "Main St" : "Park Ave";
+            {speedData && intersectionIds.map((id) => {
+              const data = speedData[id];
+              if (!data) return null;
+              const name = getShortName(id);
               return (
                 <Card key={`speed-${id}`}>
                   <CardHeader className="pb-2">
@@ -205,7 +227,7 @@ const Analytics = () => {
               <Card>
                 <CardHeader>
                   <CardTitle>Hourly Traffic Density Pattern</CardTitle>
-                  <CardDescription>Average vehicle count learned over time per hour of day</CardDescription>
+                  <CardDescription>Average vehicle count learned over time per hour of day (Online Learning)</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <div className="h-80">
@@ -216,8 +238,9 @@ const Analytics = () => {
                         <YAxis fontSize={12} stroke="hsl(var(--muted-foreground))" />
                         <Tooltip contentStyle={{ backgroundColor: "hsl(var(--card))", borderColor: "hsl(var(--border))", borderRadius: "var(--radius)" }} />
                         <Legend />
-                        <Bar dataKey="Main Street" fill="hsl(210, 100%, 50%)" radius={[4, 4, 0, 0]} />
-                        <Bar dataKey="Park Avenue" fill="hsl(200, 100%, 50%)" radius={[4, 4, 0, 0]} />
+                        {intersectionIds.map((id, idx) => (
+                          <Bar key={id} dataKey={getIntName(id)} fill={COLORS[idx % COLORS.length]} radius={[4, 4, 0, 0]} />
+                        ))}
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
@@ -255,14 +278,14 @@ const Analytics = () => {
                 <Card>
                   <CardHeader>
                     <CardTitle>Learning Activity Distribution</CardTitle>
-                    <CardDescription>Pattern updates per intersection</CardDescription>
+                    <CardDescription>Pattern updates per intersection (Continual Learning)</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="h-64">
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
-                          <Pie data={getViolationDistribution()} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value" label>
-                            {getViolationDistribution().map((_, i) => (
+                          <Pie data={getLearningDistribution()} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value" label>
+                            {getLearningDistribution().map((_, i) => (
                               <Cell key={i} fill={COLORS[i % COLORS.length]} />
                             ))}
                           </Pie>
@@ -279,12 +302,13 @@ const Analytics = () => {
               <Card>
                 <CardHeader>
                   <CardTitle>Congestion Level Summary</CardTitle>
-                  <CardDescription>Current traffic congestion assessment by intersection</CardDescription>
+                  <CardDescription>Current PCE-weighted traffic congestion assessment by intersection</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {patterns && Object.entries(patterns).map(([id, data]) => {
-                      const name = id === "int-001" ? "Main Street" : "Park Avenue";
+                  <div className={`grid gap-4 ${intersectionIds.length <= 2 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'}`}>
+                    {patterns && intersectionIds.map((id) => {
+                      const data = patterns[id];
+                      const name = getIntName(id);
                       const avg = data.predictions.current_hour_avg || 0;
                       const level = avg > 15 ? "High" : avg > 8 ? "Medium" : "Low";
                       const levelColor = level === "High" ? "destructive" : level === "Medium" ? "secondary" : "outline";
@@ -336,7 +360,7 @@ const Analytics = () => {
                                 {log.event_type}
                               </Badge>
                               <span className="text-xs text-muted-foreground">
-                                {log.intersection_id === "int-001" ? "Main Street" : "Park Avenue"}
+                                {getIntName(log.intersection_id)}
                               </span>
                               <span className="text-xs text-muted-foreground ml-auto">
                                 {new Date(log.timestamp).toLocaleTimeString()}
@@ -346,7 +370,7 @@ const Analytics = () => {
                               <div className="text-xs text-muted-foreground mt-1">
                                 {log.data.hour !== undefined && `Hour: ${log.data.hour}`}
                                 {log.data.vehicle_count !== undefined && ` | Vehicles: ${log.data.vehicle_count}`}
-                                {log.data.new_avg !== undefined && ` | New Avg: ${log.data.new_avg.toFixed(1)}`}
+                                {log.data.new_avg !== undefined && ` | New Avg: ${typeof log.data.new_avg === 'number' ? log.data.new_avg.toFixed(1) : log.data.new_avg}`}
                                 {log.data.samples !== undefined && ` | Samples: ${log.data.samples}`}
                               </div>
                             )}

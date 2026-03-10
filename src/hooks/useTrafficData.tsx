@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
-import { 
-  fetchTrafficData, 
-  updateTrafficSignal, 
-  getCameraStreamUrl, 
+import {
+  fetchTrafficData,
+  updateTrafficSignal,
+  getCameraStreamUrl,
   TrafficData,
   checkTrafficViolations,
   fetchViolations,
@@ -20,6 +20,7 @@ export interface Intersection {
   emergency: boolean;
   lastUpdated: string;
   autoMode?: boolean;
+  cameraStatus?: string;
 }
 
 // Define the history data point structure
@@ -28,127 +29,102 @@ export interface HistoryDataPoint {
   [key: string]: string | number;
 }
 
-// Intersection names
-const intersectionNames = {
-  "int-001": "Main Street",
-  "int-002": "Park Avenue"
-};
-
-// Generate initial history data
-const generateHistoryData = (): HistoryDataPoint[] => {
-  const data = [];
-  const now = new Date();
-  
-  for (let i = 60; i >= 0; i--) {
-    const time = new Date(now);
-    time.setMinutes(now.getMinutes() - i);
-    
-    data.push({
-      time: time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      "Main Street": Math.floor(Math.random() * 20) + 5,
-      "Park Avenue": Math.floor(Math.random() * 20) + 5,
-    });
-  }
-  
-  return data;
-};
-
 export const useTrafficData = () => {
   const [intersections, setIntersections] = useState<Intersection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [historyData, setHistoryData] = useState<HistoryDataPoint[]>(generateHistoryData());
+  const [historyData, setHistoryData] = useState<HistoryDataPoint[]>([]);
   const [cameraUrls, setCameraUrls] = useState<Record<string, string>>({});
   const [violations, setViolations] = useState<ViolationData[]>([]);
   const [loadingViolations, setLoadingViolations] = useState(false);
-  
-  // Optimize camera URL with a timestamp-based approach
-  useEffect(() => {
-    const updateCameraUrls = () => {
-      setCameraUrls({
-        "int-001": `${getCameraStreamUrl("int-001")}?t=${Date.now()}`,
-        "int-002": `${getCameraStreamUrl("int-002")}?t=${Date.now()}`
-      });
-    };
-    
-    updateCameraUrls();
-    
-    // Update camera URLs every 10 seconds to avoid caching
-    const cameraInterval = setInterval(updateCameraUrls, 10000);
-    
-    return () => clearInterval(cameraInterval);
+
+  // Build camera URLs from intersection data - MJPEG streams are continuous,
+  // so we only set the URL once per intersection (no timestamp cache-busting needed)
+  const updateCameraUrls = useCallback((data: TrafficData[]) => {
+    setCameraUrls(prev => {
+      const newUrls: Record<string, string> = {};
+      let changed = false;
+
+      for (const item of data) {
+        const url = getCameraStreamUrl(item.intersectionId, 15);
+        newUrls[item.intersectionId] = url;
+        if (prev[item.intersectionId] !== url) {
+          changed = true;
+        }
+      }
+
+      // Also check if intersections were removed
+      if (Object.keys(prev).length !== Object.keys(newUrls).length) {
+        changed = true;
+      }
+
+      return changed ? newUrls : prev;
+    });
   }, []);
 
   // Fetch traffic data from the backend
   useEffect(() => {
     const fetchData = async () => {
       try {
-        setLoading(true);
         const data = await fetchTrafficData();
-        
+
         if (!data || data.length === 0) {
-          console.error("No data received from traffic API");
+          if (!loading) return; // Don't show error on subsequent empty fetches
           return;
         }
-        
-        // Map API data to intersection objects
+
+        // Map API data to intersection objects - fully dynamic
         const updatedIntersections = data.map(item => ({
           id: item.intersectionId,
-          name: intersectionNames[item.intersectionId as keyof typeof intersectionNames] || "Unknown Intersection",
+          name: item.name || item.intersectionId,
           vehicleCount: item.vehicleCount,
-          status: item.status || "red",
+          status: item.status || "red" as const,
           emergency: item.hasEmergencyVehicle,
           lastUpdated: item.timestamp ? new Date(item.timestamp).toLocaleTimeString() : 'N/A',
           autoMode: item.autoMode || false,
+          cameraStatus: item.cameraStatus,
         }));
-        
+
         setIntersections(updatedIntersections);
-        
+        updateCameraUrls(data);
+
         // Update history with new data points
         setHistoryData(prev => {
           const newPoint: HistoryDataPoint = {
             time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
           };
-          
-          // Add data for each intersection
+
           updatedIntersections.forEach(intersection => {
-            const intersectionName = intersectionNames[intersection.id as keyof typeof intersectionNames];
-            if (intersectionName) {
-              newPoint[intersectionName] = intersection.vehicleCount;
-            }
+            newPoint[intersection.name] = intersection.vehicleCount;
           });
-          
-          // Keep only the last 60 data points
-          return [...prev.slice(1), newPoint];
+
+          const updated = [...prev, newPoint];
+          // Keep last 60 data points
+          return updated.length > 60 ? updated.slice(-60) : updated;
         });
-        
+
         setError(null);
+        setLoading(false);
       } catch (err) {
         console.error("Failed to fetch traffic data:", err);
         setError("Failed to fetch traffic data. Please ensure the backend server is running.");
-      } finally {
         setLoading(false);
       }
     };
 
     fetchData();
-    
-    // Refresh data every 3 seconds
     const interval = setInterval(fetchData, 3000);
-    
     return () => clearInterval(interval);
-  }, []);
+  }, [updateCameraUrls, loading]);
 
   // Update traffic signal status
   const updateTrafficStatus = useCallback(async (id: string, status: "red" | "yellow" | "green") => {
     try {
       await updateTrafficSignal(id, status);
-      
-      // Optimistically update the UI
-      setIntersections(prev => 
-        prev.map(intersection => 
-          intersection.id === id 
-            ? { ...intersection, status, lastUpdated: new Date().toLocaleTimeString() } 
+      setIntersections(prev =>
+        prev.map(intersection =>
+          intersection.id === id
+            ? { ...intersection, status, lastUpdated: new Date().toLocaleTimeString() }
             : intersection
         )
       );
@@ -162,20 +138,15 @@ export const useTrafficData = () => {
   const toggleAutoTrafficControl = useCallback(async (id: string, enabled: boolean) => {
     try {
       const success = await toggleAutoMode(id, enabled);
-      
       if (success) {
-        // Optimistically update the UI
-        setIntersections(prev => 
-          prev.map(intersection => 
-            intersection.id === id 
-              ? { ...intersection, autoMode: enabled, lastUpdated: new Date().toLocaleTimeString() } 
+        setIntersections(prev =>
+          prev.map(intersection =>
+            intersection.id === id
+              ? { ...intersection, autoMode: enabled, lastUpdated: new Date().toLocaleTimeString() }
               : intersection
           )
         );
-        
-        toast.success(`Auto control ${enabled ? 'enabled' : 'disabled'} for ${intersectionNames[id as keyof typeof intersectionNames]}`);
       }
-      
       return success;
     } catch (err) {
       console.error("Failed to toggle auto traffic control:", err);
@@ -191,13 +162,9 @@ export const useTrafficData = () => {
         toast.error("Invalid intersection ID");
         return false;
       }
-      
       toast.info("Checking for traffic violations...");
       const result = await checkTrafficViolations(intersectionId);
-      
-      // Refresh violations list regardless of result
       await loadViolations();
-      
       return result;
     } catch (err) {
       console.error("Error checking violations:", err);
@@ -214,13 +181,12 @@ export const useTrafficData = () => {
       setViolations(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error("Failed to fetch violations:", err);
-      toast.error("Failed to load violations data");
     } finally {
       setLoadingViolations(false);
     }
   }, []);
 
-  // Load violations when component mounts
+  // Load violations on mount
   useEffect(() => {
     loadViolations();
   }, [loadViolations]);

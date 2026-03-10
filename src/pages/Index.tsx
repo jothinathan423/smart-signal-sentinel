@@ -19,10 +19,11 @@ const Index = () => {
               <Activity className="h-6 w-6 text-primary" />
             </div>
             <h1 className="text-4xl font-bold tracking-tighter sm:text-5xl md:text-6xl/none animate-slide-up">
-              Smart Traffic Management System
+              Centralized AI-Based Smart Traffic Management System
             </h1>
             <p className="max-w-[700px] text-muted-foreground md:text-xl/relaxed lg:text-base/relaxed xl:text-xl/relaxed animate-slide-up" style={{ animationDelay: "100ms" }}>
-              Intelligent traffic monitoring and control system with emergency vehicle detection
+              Using YOLO with Online and Continual Learning for real-time vehicle detection,
+              dynamic signal control, emergency priority, and traffic violation enforcement
             </p>
             <div className="flex flex-wrap items-center justify-center gap-4 animate-slide-up" style={{ animationDelay: "200ms" }}>
               <Button size="lg" onClick={() => navigate("/dashboard")}>
@@ -44,7 +45,7 @@ const Index = () => {
               </div>
               <h3 className="text-xl font-bold mb-2">Real-time Monitoring</h3>
               <p className="text-muted-foreground">
-                Advanced computer vision algorithms to count vehicles and detect traffic patterns in real-time.
+                YOLOv11-based vehicle detection with PCE-weighted density estimation from live camera feeds.
               </p>
             </div>
 
@@ -74,7 +75,7 @@ const Index = () => {
       <footer className="border-t py-6 md:py-0">
         <div className="container flex flex-col items-center justify-between gap-4 md:h-24 md:flex-row">
           <p className="text-center text-sm leading-loose text-muted-foreground md:text-left">
-            © 2023 Smart Traffic Management System. All rights reserved.
+            © 2025 Centralized AI-Based Smart Traffic Management System. All rights reserved.
           </p>
         </div>
       </footer>

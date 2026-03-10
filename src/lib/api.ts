@@ -1,13 +1,17 @@
-// API interface for communicating with our Python backend
+// API interface for communicating with the Python backend
 import { toast } from "sonner";
 
 export interface TrafficData {
   intersectionId: string;
+  name: string;
   vehicleCount: number;
+  pceDensity?: number;
+  vehicleTypeCounts?: Record<string, number>;
   hasEmergencyVehicle: boolean;
   timestamp: string;
   status?: "red" | "yellow" | "green";
   autoMode?: boolean;
+  cameraStatus?: string;
 }
 
 export interface ViolationData {
@@ -55,9 +59,21 @@ export interface LearningLog {
 
 export interface CameraConfig {
   intersection_id: string;
+  name: string;
   camera_source: string;
   camera_type: "usb" | "ip" | "rtsp";
   status: string;
+}
+
+export interface IntersectionInfo {
+  id: string;
+  name: string;
+  camera_source: string;
+  camera_type: "usb" | "ip" | "rtsp";
+  camera_status: string;
+  signal: string;
+  vehicle_count: number;
+  auto_mode: boolean;
 }
 
 // Base URL for the backend API
@@ -71,7 +87,6 @@ export const fetchTrafficData = async (): Promise<TrafficData[]> => {
     return await response.json();
   } catch (error) {
     console.error("Error fetching traffic data:", error);
-    toast.error("Failed to connect to traffic management system.");
     return [];
   }
 };
@@ -125,8 +140,8 @@ export const toggleAutoMode = async (
   }
 };
 
-// Get camera URL with appropriate parameters
-export const getCameraStreamUrl = (intersectionId: string, fps: number = 1): string => {
+// Get MJPEG stream URL for a camera - this is a continuous stream, NOT a static image
+export const getCameraStreamUrl = (intersectionId: string, fps: number = 15): string => {
   return `${API_BASE_URL}/api/video_feed/${intersectionId}?fps=${fps}`;
 };
 
@@ -165,7 +180,6 @@ export const fetchViolations = async (): Promise<ViolationData[]> => {
     return Array.isArray(data) ? data : [];
   } catch (error) {
     console.error("Error fetching violations:", error);
-    toast.error("Could not fetch violation data.");
     return [];
   }
 };
@@ -206,7 +220,7 @@ export const fetchLearningLogs = async (): Promise<LearningLog[]> => {
   }
 };
 
-// Configure IP camera
+// Configure camera for an existing intersection
 export const configureCamera = async (
   intersectionId: string,
   cameraSource: string,
@@ -221,7 +235,7 @@ export const configureCamera = async (
     if (!response.ok) throw new Error(`API error: ${response.status}`);
     const result = await response.json();
     if (result.success) {
-      toast.success(`Camera configured for ${intersectionId}`);
+      toast.success(result.message || `Camera configured for ${intersectionId}`);
       return true;
     }
     toast.error(result.error || "Failed to configure camera");
@@ -254,5 +268,74 @@ export const fetchCongestionSummary = async (): Promise<Record<string, any> | nu
   } catch (error) {
     console.error("Error fetching congestion summary:", error);
     return null;
+  }
+};
+
+// ============= NEW: Intersection management APIs =============
+
+// Add a new intersection
+export const addIntersection = async (
+  intersectionId: string,
+  name: string,
+  cameraSource: string,
+  cameraType: "usb" | "ip" | "rtsp"
+): Promise<boolean> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/traffic/intersections`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ intersectionId, name, cameraSource, cameraType }),
+    });
+    if (!response.ok) {
+      const result = await response.json();
+      toast.error(result.error || "Failed to add intersection");
+      return false;
+    }
+    const result = await response.json();
+    if (result.success) {
+      toast.success(result.message || `Intersection ${name} added`);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error("Error adding intersection:", error);
+    toast.error("Could not add intersection. Is the backend running?");
+    return false;
+  }
+};
+
+// Remove an intersection
+export const removeIntersection = async (intersectionId: string): Promise<boolean> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/traffic/intersections/${intersectionId}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      const result = await response.json();
+      toast.error(result.error || "Failed to remove intersection");
+      return false;
+    }
+    const result = await response.json();
+    if (result.success) {
+      toast.success(result.message || `Intersection removed`);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error("Error removing intersection:", error);
+    toast.error("Could not remove intersection.");
+    return false;
+  }
+};
+
+// List all intersections
+export const fetchIntersections = async (): Promise<IntersectionInfo[]> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/traffic/intersections`);
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    console.error("Error fetching intersections:", error);
+    return [];
   }
 };
