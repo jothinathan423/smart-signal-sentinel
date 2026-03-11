@@ -1,5 +1,5 @@
 
-import React, { useState } from "react";
+import { useState } from "react";
 import Navigation from "@/components/Navigation";
 import Intersection from "@/components/Intersection";
 import TrafficGraph from "@/components/TrafficGraph";
@@ -8,7 +8,7 @@ import ViolationsList from "@/components/ViolationsList";
 import CongestionIndicator from "@/components/CongestionIndicator";
 import { useTrafficData } from "@/hooks/useTrafficData";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, AlertTriangle, FileWarning, Scan, Camera, ArrowLeftRight } from "lucide-react";
+import { RefreshCw, AlertTriangle, FileWarning, Scan, Camera, ArrowLeftRight, Siren, Activity, Car } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -25,15 +25,22 @@ const Dashboard = () => {
     loadingViolations,
     checkViolations,
     refreshViolations,
-    toggleAutoTrafficControl
+    toggleAutoTrafficControl,
+    systemOverview,
   } = useTrafficData();
 
   const [checkingViolations, setCheckingViolations] = useState(false);
-  const [activeTab, setActiveTab] = useState<string>("status");
+  const [activeTab, setActiveTab] = useState<string>("all");
+  const [bottomTab, setBottomTab] = useState<string>("status");
   const [viewMode, setViewMode] = useState<"split" | "single">("split");
   const [activeIntersection, setActiveIntersection] = useState<string>("");
 
-  const hasEmergency = intersections.some(int => int.emergency);
+  // Only show intersections with active cameras
+  const activeIntersections = intersections.filter(int => int.cameraStatus === "active");
+
+  const emergencyIntersections = activeIntersections.filter(int => int.emergency);
+  const emergencyCount = emergencyIntersections.length;
+  const totalEmergencyVehicles = activeIntersections.reduce((sum, int) => sum + (int.emergencyCount || 0), 0);
 
   const handleCheckViolations = async (intersectionId: string) => {
     setCheckingViolations(true);
@@ -50,15 +57,15 @@ const Dashboard = () => {
 
   // Build graph data dynamically from whatever intersections exist
   const graphData = historyData.map(point => {
-    const entry: Record<string, string | number> = { time: point.time };
-    intersections.forEach(int => {
+    const entry: { time: string; [key: string]: string | number } = { time: point.time };
+    activeIntersections.forEach(int => {
       entry[int.name] = point[int.name] || 0;
     });
     return entry;
   });
 
   // Set default active intersection
-  const currentActiveIntersection = activeIntersection || intersections[0]?.id || "";
+  const currentActiveIntersection = activeIntersection || activeIntersections[0]?.id || "";
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -70,16 +77,16 @@ const Dashboard = () => {
             <div>
               <h1 className="text-3xl font-bold tracking-tight">Traffic Dashboard</h1>
               <p className="text-muted-foreground">
-                Real-time monitoring of {intersections.length} intersection{intersections.length !== 1 ? 's' : ''}
+                Real-time traffic monitoring and control
               </p>
             </div>
 
-            <div className="flex items-center gap-4">
-              {hasEmergency && (
-                <div className="bg-traffic-emergency/10 text-traffic-emergency px-3 py-1.5 rounded-lg flex items-center gap-2 animate-emergency-pulse">
-                  <AlertTriangle className="h-4 w-4" />
-                  <span className="font-medium">Emergency Vehicle Detected</span>
-                </div>
+            <div className="flex items-center gap-3">
+              {totalEmergencyVehicles > 0 && (
+                <Badge variant="destructive" className="text-sm px-3 py-1.5 animate-pulse flex items-center gap-1.5">
+                  <Siren className="h-4 w-4" />
+                  {totalEmergencyVehicles} Emergency
+                </Badge>
               )}
               <Button variant="outline" size="sm" onClick={() => window.location.reload()}>
                 <RefreshCw className="h-4 w-4 mr-2" />
@@ -94,260 +101,344 @@ const Dashboard = () => {
             </div>
           )}
 
-          {loading && intersections.length === 0 && (
+          {loading && activeIntersections.length === 0 && (
             <div className="text-center py-8">
               <div className="animate-spin h-8 w-8 mx-auto border-4 border-primary border-t-transparent rounded-full mb-4"></div>
               <p className="text-muted-foreground">Connecting to cameras and traffic data...</p>
             </div>
           )}
 
-          {/* Congestion Summary - dynamic grid */}
-          {intersections.length > 0 && (
-            <div className={`grid gap-4 ${
-              intersections.length === 1 ? 'grid-cols-1' :
-              intersections.length === 2 ? 'grid-cols-1 sm:grid-cols-2' :
-              intersections.length === 3 ? 'grid-cols-1 sm:grid-cols-3' :
-              'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4'
-            }`}>
-              {intersections.map(int => (
-                <CongestionIndicator
-                  key={int.id}
-                  vehicleCount={int.vehicleCount}
-                />
-              ))}
+          {!loading && activeIntersections.length === 0 && (
+            <div className="text-center py-12 border rounded-lg bg-muted/20">
+              <Camera className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+              <h3 className="text-lg font-medium">No Active Cameras</h3>
+              <p className="text-muted-foreground mt-2">
+                Add traffic cameras in the <strong>Settings</strong> page to start monitoring intersections.
+              </p>
             </div>
           )}
 
-          {/* Toggle for view mode */}
-          {intersections.length > 1 && (
-            <div className="flex justify-end">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setViewMode(viewMode === "split" ? "single" : "split")}
-                className="flex items-center gap-2"
-              >
-                <ArrowLeftRight className="h-4 w-4" />
-                {viewMode === "split" ? "Single View" : "Split View"}
-              </Button>
-            </div>
-          )}
+          {/* Main Tabs: All Intersections / Emergency */}
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <div className="flex items-center justify-between">
+              <TabsList>
+                <TabsTrigger value="all">All Intersections</TabsTrigger>
+                <TabsTrigger value="emergency" className="flex items-center gap-1.5">
+                  Emergency
+                  {emergencyCount > 0 && (
+                    <span className="bg-destructive text-destructive-foreground text-xs rounded-full px-1.5 py-0.5 min-w-[20px] text-center">
+                      {emergencyCount}
+                    </span>
+                  )}
+                </TabsTrigger>
+              </TabsList>
 
-          {viewMode === "split" ? (
-            /* Split View - dynamic grid of all intersections */
-            <div className={`grid gap-6 ${
-              intersections.length === 1 ? 'grid-cols-1' :
-              intersections.length <= 2 ? 'grid-cols-1 lg:grid-cols-2' :
-              intersections.length <= 3 ? 'grid-cols-1 lg:grid-cols-3' :
-              'grid-cols-1 lg:grid-cols-2 xl:grid-cols-3'
-            }`}>
-              {intersections.map(intersection => (
-                <Card key={intersection.id}>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Camera className="h-5 w-5" />
-                        <span className="truncate">{intersection.name}</span>
+              {activeIntersections.length > 1 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setViewMode(viewMode === "split" ? "single" : "split")}
+                  className="flex items-center gap-2"
+                >
+                  <ArrowLeftRight className="h-4 w-4" />
+                  {viewMode === "split" ? "Single View" : "Split View"}
+                </Button>
+              )}
+            </div>
+
+            <TabsContent value="all" className="mt-4">
+              <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+                {/* Intersection Cards - Left 3 cols */}
+                <div className="lg:col-span-3">
+                  {viewMode === "split" ? (
+                    <div className={`grid gap-6 ${
+                      activeIntersections.length === 1 ? 'grid-cols-1' :
+                      activeIntersections.length <= 2 ? 'grid-cols-1 md:grid-cols-2' :
+                      activeIntersections.length <= 3 ? 'grid-cols-1 md:grid-cols-3' :
+                      'grid-cols-1 md:grid-cols-2 xl:grid-cols-3'
+                    }`}>
+                      {activeIntersections.map(intersection => (
+                        <Card key={intersection.id} className="overflow-hidden">
+                          <CardHeader className="pb-2">
+                            <div className="flex items-center justify-between">
+                              <CardTitle className="text-lg truncate">{intersection.name}</CardTitle>
+                              <Badge
+                                variant="outline"
+                                className={intersection.status === "green" ? "bg-traffic-green/10 text-traffic-green border-traffic-green/30" :
+                                           intersection.status === "yellow" ? "bg-traffic-yellow/10 text-yellow-800 border-traffic-yellow/30" :
+                                           "bg-traffic-red/10 text-traffic-red border-traffic-red/30"}
+                              >
+                                {intersection.status?.toUpperCase() || "UNKNOWN"}
+                              </Badge>
+                            </div>
+                            <div className="text-xs text-muted-foreground">Last updated: {intersection.lastUpdated}</div>
+                          </CardHeader>
+                          <CardContent className="space-y-4">
+                            <div className="grid grid-cols-2 gap-4">
+                              <div className="p-3 rounded-lg bg-muted/30 space-y-2">
+                                <div className="text-xs uppercase tracking-wider font-medium text-muted-foreground">Traffic Signal</div>
+                                <div className="flex flex-col items-center gap-2">
+                                  <div className={`w-12 h-12 rounded-full flex items-center justify-center text-xs font-bold
+                                    ${intersection.status === "red" ? "bg-traffic-red text-white" : "bg-traffic-red/20"}`}>
+                                    {intersection.status === "red" && "STOP"}
+                                  </div>
+                                  <div className={`w-12 h-12 rounded-full flex items-center justify-center text-xs font-bold
+                                    ${intersection.status === "yellow" ? "bg-traffic-yellow text-black" : "bg-traffic-yellow/20"}`}>
+                                    {intersection.status === "yellow" && "WAIT"}
+                                  </div>
+                                  <div className={`w-12 h-12 rounded-full flex items-center justify-center text-xs font-bold
+                                    ${intersection.status === "green" ? "bg-traffic-green text-white" : "bg-traffic-green/20"}`}>
+                                    {intersection.status === "green" && "GO"}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="p-3 rounded-lg bg-muted/30 space-y-2">
+                                <div className="text-xs uppercase tracking-wider font-medium text-muted-foreground">Vehicle Count</div>
+                                <div className="flex items-center gap-2 mt-2">
+                                  <Car className="h-6 w-6 text-primary" />
+                                  <span className="text-3xl font-bold">{intersection.vehicleCount}</span>
+                                </div>
+                                {intersection.emergency && (
+                                  <div className="text-xs text-traffic-emergency font-medium mt-1 flex items-center gap-1">
+                                    <Siren className="h-3 w-3" />
+                                    Emergency Vehicle Detected
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Emergency alert */}
+                            {intersection.emergency && (
+                              <div className="flex items-center gap-3 p-3 rounded-lg bg-traffic-emergency/10 border border-traffic-emergency/20 animate-pulse">
+                                <div className="bg-traffic-emergency text-white p-2 rounded-full">
+                                  <Siren className="w-5 h-5" />
+                                </div>
+                                <div className="flex-1">
+                                  <h4 className="font-medium text-traffic-emergency text-sm">Emergency Vehicle Detected</h4>
+                                  <p className="text-xs text-muted-foreground">Traffic signal priority activated</p>
+                                </div>
+                                <AlertTriangle className="w-5 h-5 text-traffic-emergency" />
+                              </div>
+                            )}
+
+                            {/* Signal controls */}
+                            <div className="flex items-center justify-between">
+                              <div className="text-xs text-muted-foreground">ID: {intersection.id}</div>
+                              <div className="flex gap-1.5">
+                                {(["red", "yellow", "green"] as const).map(sig => (
+                                  <Button
+                                    key={sig}
+                                    variant="outline"
+                                    size="sm"
+                                    className={intersection.status === sig ?
+                                      sig === "red" ? "bg-traffic-red/10 border-traffic-red/30 text-traffic-red" :
+                                      sig === "yellow" ? "bg-traffic-yellow/10 border-traffic-yellow/30 text-yellow-800" :
+                                      "bg-traffic-green/10 border-traffic-green/30 text-traffic-green"
+                                      : ""}
+                                    onClick={() => updateTrafficStatus(intersection.id, sig)}
+                                    disabled={intersection.autoMode}
+                                  >
+                                    {sig.charAt(0).toUpperCase() + sig.slice(1)}
+                                  </Button>
+                                ))}
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  ) : (
+                    /* Single View - tabs for each intersection */
+                    activeIntersections.length > 0 && (
+                      <Tabs value={currentActiveIntersection} onValueChange={setActiveIntersection} className="space-y-4">
+                        <TabsList className="w-full flex flex-wrap">
+                          {activeIntersections.map(int => (
+                            <TabsTrigger key={int.id} value={int.id} className="flex-1">{int.name}</TabsTrigger>
+                          ))}
+                        </TabsList>
+
+                        {activeIntersections.map(intersection => (
+                          <TabsContent key={intersection.id} value={intersection.id} className="space-y-4">
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                              <CameraFeed
+                                cameraUrl={cameraUrls[intersection.id] || ''}
+                                title={`${intersection.name} Camera`}
+                              />
+                              <div className="flex flex-col gap-4">
+                                <Intersection
+                                  {...intersection}
+                                  onStatusChange={updateTrafficStatus}
+                                  onAutoModeChange={handleAutoModeChange}
+                                />
+                                <CongestionIndicator vehicleCount={intersection.vehicleCount} />
+                                <Button
+                                  onClick={() => handleCheckViolations(intersection.id)}
+                                  disabled={checkingViolations}
+                                  variant="default"
+                                  className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+                                >
+                                  <Scan className="h-4 w-4 mr-2" />
+                                  Check for Violations
+                                </Button>
+                              </div>
+                            </div>
+                          </TabsContent>
+                        ))}
+                      </Tabs>
+                    )
+                  )}
+                </div>
+
+                {/* Right sidebar - Traffic flow chart + System status */}
+                <div className="lg:col-span-1 space-y-4">
+                  <TrafficGraph data={graphData} className="h-auto" />
+
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground">System Status</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-2">
+                      <div className="flex items-center justify-between py-1.5">
+                        <span className="text-sm">Monitored Intersections</span>
+                        <span className="font-bold">{systemOverview?.monitored_intersections || activeIntersections.length}</span>
                       </div>
-                      <Badge
-                        variant="outline"
-                        className={intersection.status === "green" ? "bg-traffic-green/10 text-traffic-green" :
-                                   intersection.status === "yellow" ? "bg-traffic-yellow/10 text-yellow-800" :
-                                   "bg-traffic-red/10 text-traffic-red"}
-                      >
-                        {intersection.status?.toUpperCase() || "UNKNOWN"}
-                      </Badge>
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <CameraFeed
-                      cameraUrl={cameraUrls[intersection.id] || ''}
-                      title={`${intersection.name} Camera`}
-                    />
+                      <div className="flex items-center justify-between py-1.5">
+                        <span className="text-sm">Emergency Vehicles</span>
+                        <span className="font-bold text-traffic-emergency">{systemOverview?.emergency_vehicles || totalEmergencyVehicles}</span>
+                      </div>
+                      <div className="flex items-center justify-between py-1.5">
+                        <span className="text-sm">Total Vehicles</span>
+                        <span className="font-bold">{systemOverview?.total_vehicles || activeIntersections.reduce((s, i) => s + i.vehicleCount, 0)}</span>
+                      </div>
+                      <div className="flex items-center justify-between py-1.5">
+                        <span className="text-sm">Active Cameras</span>
+                        <span className="font-bold">{systemOverview?.active_cameras || 0}</span>
+                      </div>
+                      <div className="flex items-center justify-between py-1.5">
+                        <span className="text-sm">Auto Mode</span>
+                        <span className="font-bold">{systemOverview?.auto_mode_count || activeIntersections.filter(i => i.autoMode).length}</span>
+                      </div>
+                      <div className="flex items-center justify-between py-1.5">
+                        <span className="text-sm">Signal Controllers</span>
+                        <span className="font-bold">{systemOverview?.signal_controllers || 0}</span>
+                      </div>
+                      <div className="flex items-center justify-between py-1.5">
+                        <span className="text-sm">Total PCE Density</span>
+                        <span className="font-bold">{systemOverview?.total_pce_density || 0}</span>
+                      </div>
+                      {systemOverview?.cuda_available && (
+                        <Badge variant="outline" className="mt-2 bg-green-50 text-green-700 border-green-200">
+                          GPU Accelerated
+                        </Badge>
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
+              </div>
+            </TabsContent>
 
-                    <Intersection
-                      {...intersection}
-                      onStatusChange={updateTrafficStatus}
-                      onAutoModeChange={handleAutoModeChange}
-                    />
-
-                    <Button
-                      onClick={() => handleCheckViolations(intersection.id)}
-                      disabled={checkingViolations}
-                      variant="default"
-                      className="w-full bg-destructive hover:bg-destructive/90 text-destructive-foreground"
-                    >
-                      <Scan className="h-4 w-4 mr-2" />
-                      Check for Violations
-                    </Button>
+            <TabsContent value="emergency" className="mt-4">
+              {emergencyIntersections.length === 0 ? (
+                <Card>
+                  <CardContent className="py-12 text-center">
+                    <Activity className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+                    <h3 className="text-lg font-medium">No Emergency Vehicles Detected</h3>
+                    <p className="text-muted-foreground mt-2">
+                      The system monitors all intersections for emergency vehicles in real-time.
+                      Green corridors are automatically created when detected.
+                    </p>
                   </CardContent>
                 </Card>
-              ))}
-            </div>
-          ) : (
-            /* Single View - tabs for each intersection */
-            intersections.length > 0 && (
-              <Tabs value={currentActiveIntersection} onValueChange={setActiveIntersection} className="space-y-4">
-                <TabsList className={`w-full grid grid-cols-${Math.min(intersections.length, 4)}`}>
-                  {intersections.map(int => (
-                    <TabsTrigger key={int.id} value={int.id}>{int.name}</TabsTrigger>
-                  ))}
-                </TabsList>
-
-                {intersections.map(intersection => (
-                  <TabsContent key={intersection.id} value={intersection.id} className="space-y-4">
-                    {renderIntersectionContent(intersection.id, intersection)}
-                  </TabsContent>
-                ))}
-              </Tabs>
-            )
-          )}
-
-          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-            <div className="lg:col-span-3">
-              <Tabs value={activeTab} onValueChange={setActiveTab}>
-                <TabsList className="mb-4">
-                  <TabsTrigger value="status">Traffic History</TabsTrigger>
-                  <TabsTrigger value="violations" className="flex items-center gap-1.5">
-                    <FileWarning className="h-4 w-4" />
-                    Violations
-                    {violations.length > 0 && (
-                      <span className="bg-destructive/20 text-destructive text-xs px-1.5 py-0.5 rounded-full">
-                        {violations.length}
-                      </span>
-                    )}
-                  </TabsTrigger>
-                </TabsList>
-
-                <TabsContent value="status" className="mt-0">
-                  <TrafficGraph data={graphData} />
-                </TabsContent>
-
-                <TabsContent value="violations" className="mt-0">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-semibold">Recent Traffic Violations</h3>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={refreshViolations}
-                      disabled={loadingViolations}
-                    >
-                      <RefreshCw className={`h-4 w-4 mr-2 ${loadingViolations ? 'animate-spin' : ''}`} />
-                      Refresh
-                    </Button>
-                  </div>
-                  <ViolationsList violations={violations} isLoading={loadingViolations} />
-                </TabsContent>
-              </Tabs>
-            </div>
-
-            <div className="lg:col-span-1">
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm">System Status</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <div className="p-3 rounded-lg bg-destructive/5 border border-destructive/10">
-                    <h4 className="font-medium text-destructive text-sm">Violation Detection</h4>
-                    <ul className="text-xs text-muted-foreground mt-1 space-y-1 list-disc pl-4">
-                      <li>Red light crossing</li>
-                      <li>Speeding detection</li>
-                      <li>No helmet (AI vision)</li>
-                      <li>Excess passengers</li>
-                    </ul>
+              ) : (
+                <div className="space-y-4">
+                  <div className="bg-traffic-emergency/10 border border-traffic-emergency/20 rounded-lg p-4 flex items-center gap-3">
+                    <Siren className="h-6 w-6 text-traffic-emergency" />
+                    <div>
+                      <h3 className="font-medium text-traffic-emergency">
+                        {totalEmergencyVehicles} Emergency Vehicle{totalEmergencyVehicles !== 1 ? 's' : ''} Active
+                      </h3>
+                      <p className="text-sm text-muted-foreground">
+                        Green corridors have been automatically activated at {emergencyCount} intersection{emergencyCount !== 1 ? 's' : ''}
+                      </p>
+                    </div>
                   </div>
 
-                  <div className="p-3 rounded-lg bg-primary/5 border border-primary/10">
-                    <h4 className="font-medium text-primary text-sm">AI Features</h4>
-                    <ul className="text-xs text-muted-foreground mt-1 space-y-1 list-disc pl-4">
-                      <li>YOLOv11 vehicle detection</li>
-                      <li>Online pattern learning</li>
-                      <li>Predictive signal timing</li>
-                      <li>Speed tracking</li>
-                    </ul>
+                  <div className="grid gap-4 grid-cols-1 md:grid-cols-2">
+                    {emergencyIntersections.map(intersection => (
+                      <Card key={intersection.id} className="border-traffic-emergency/30">
+                        <CardHeader className="pb-2">
+                          <div className="flex items-center justify-between">
+                            <CardTitle className="text-lg">{intersection.name}</CardTitle>
+                            <Badge variant="destructive" className="animate-pulse">
+                              <Siren className="h-3 w-3 mr-1" />
+                              EMERGENCY
+                            </Badge>
+                          </div>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="p-3 rounded-lg bg-traffic-green/10 text-center">
+                              <div className="text-xs text-muted-foreground">Signal</div>
+                              <div className="text-lg font-bold text-traffic-green">GREEN</div>
+                              <div className="text-xs text-muted-foreground">Priority Active</div>
+                            </div>
+                            <div className="p-3 rounded-lg bg-muted/30 text-center">
+                              <div className="text-xs text-muted-foreground">Vehicles</div>
+                              <div className="text-2xl font-bold">{intersection.vehicleCount}</div>
+                            </div>
+                          </div>
+                          <CameraFeed
+                            cameraUrl={cameraUrls[intersection.id] || ''}
+                            title={`${intersection.name} - Emergency Feed`}
+                          />
+                        </CardContent>
+                      </Card>
+                    ))}
                   </div>
+                </div>
+              )}
+            </TabsContent>
+          </Tabs>
 
-                  <div className="p-3 rounded-lg bg-accent border border-border">
-                    <h4 className="font-medium text-sm">Intersections</h4>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {intersections.length} active intersection{intersections.length !== 1 ? 's' : ''}
-                      {intersections.filter(i => i.autoMode).length > 0 &&
-                        ` (${intersections.filter(i => i.autoMode).length} in auto mode)`}
-                    </p>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-          </div>
+          {/* Bottom section: Traffic History / Violations */}
+          <Tabs value={bottomTab} onValueChange={setBottomTab}>
+            <TabsList className="mb-4">
+              <TabsTrigger value="status">Traffic History</TabsTrigger>
+              <TabsTrigger value="violations" className="flex items-center gap-1.5">
+                <FileWarning className="h-4 w-4" />
+                Violations
+                {violations.length > 0 && (
+                  <span className="bg-destructive/20 text-destructive text-xs px-1.5 py-0.5 rounded-full">
+                    {violations.length}
+                  </span>
+                )}
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="status" className="mt-0">
+              <TrafficGraph data={graphData} />
+            </TabsContent>
+
+            <TabsContent value="violations" className="mt-0">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold">Recent Traffic Violations</h3>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={refreshViolations}
+                  disabled={loadingViolations}
+                >
+                  <RefreshCw className={`h-4 w-4 mr-2 ${loadingViolations ? 'animate-spin' : ''}`} />
+                  Refresh
+                </Button>
+              </div>
+              <ViolationsList violations={violations} isLoading={loadingViolations} />
+            </TabsContent>
+          </Tabs>
         </div>
       </main>
     </div>
   );
-
-  function renderIntersectionContent(intersectionId: string, intersection: any) {
-    return (
-      <>
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-          <div className="lg:col-span-2">
-            <CameraFeed
-              cameraUrl={cameraUrls[intersectionId] || ''}
-              title={`${intersection?.name || 'Loading...'} Camera`}
-            />
-          </div>
-
-          <div className="lg:col-span-2">
-            <div className="flex flex-col gap-4">
-              {intersection ? (
-                <>
-                  <Intersection
-                    key={intersection.id}
-                    {...intersection}
-                    onStatusChange={updateTrafficStatus}
-                    onAutoModeChange={handleAutoModeChange}
-                  />
-                  <CongestionIndicator vehicleCount={intersection.vehicleCount} />
-                </>
-              ) : !loading ? (
-                <div className="flex flex-col items-center justify-center py-12 bg-muted/20 rounded-xl">
-                  <div className="bg-muted p-4 rounded-full mb-4">
-                    <AlertTriangle className="h-6 w-6 text-muted-foreground" />
-                  </div>
-                  <h3 className="text-lg font-medium">No Traffic Data</h3>
-                  <p className="text-muted-foreground text-center max-w-md mt-2">
-                    No traffic data available. Please ensure the backend server is running.
-                  </p>
-                </div>
-              ) : (
-                <div className="rounded-xl bg-muted/10 p-6 flex items-center justify-center">
-                  <div className="animate-spin h-6 w-6 border-4 border-primary border-t-transparent rounded-full mr-3"></div>
-                  <span>Loading intersection data...</span>
-                </div>
-              )}
-
-              <Button
-                onClick={() => handleCheckViolations(intersectionId)}
-                disabled={checkingViolations || !intersection}
-                variant="default"
-                className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
-              >
-                {checkingViolations ? (
-                  <>
-                    <div className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2"></div>
-                    Scanning for violations...
-                  </>
-                ) : (
-                  <>
-                    <Scan className="h-4 w-4 mr-2" />
-                    Check for Traffic Violations
-                  </>
-                )}
-              </Button>
-            </div>
-          </div>
-        </div>
-      </>
-    );
-  }
 };
 
 export default Dashboard;

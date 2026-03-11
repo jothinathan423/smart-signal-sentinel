@@ -20,12 +20,19 @@ const TrafficGraph = ({ data, className }: TrafficGraphProps) => {
   // Determine which data keys to display (excluding the time key)
   const dataKeys = Object.keys(data[0] || {}).filter(key => key !== 'time');
 
-  // Define colors for each intersection
-  const colors = {
-    "count": "hsl(var(--primary))",
-    "Main Street": "hsl(var(--primary))",
-    "Park Avenue": "hsl(200, 100%, 50%)"
-  };
+  // Dynamic color palette for any number of intersections
+  const colorPalette = [
+    "hsl(210, 100%, 50%)",
+    "hsl(200, 100%, 50%)",
+    "hsl(150, 70%, 45%)",
+    "hsl(40, 90%, 55%)",
+    "hsl(280, 70%, 50%)",
+    "hsl(350, 80%, 55%)",
+    "hsl(170, 80%, 40%)",
+    "hsl(30, 90%, 50%)",
+  ];
+
+  const getColor = (index: number) => colorPalette[index % colorPalette.length];
 
   return (
     <div className={cn("p-4 rounded-xl glass flex flex-col gap-4", className)}>
@@ -46,8 +53,8 @@ const TrafficGraph = ({ data, className }: TrafficGraphProps) => {
             <defs>
               {dataKeys.map((key, index) => (
                 <linearGradient key={key} id={`color${key.replace(/\s+/g, '')}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={colors[key as keyof typeof colors] || `hsl(${index * 60}, 70%, 50%)`} stopOpacity={0.8} />
-                  <stop offset="95%" stopColor={colors[key as keyof typeof colors] || `hsl(${index * 60}, 70%, 50%)`} stopOpacity={0.1} />
+                  <stop offset="5%" stopColor={getColor(index)} stopOpacity={0.8} />
+                  <stop offset="95%" stopColor={getColor(index)} stopOpacity={0.1} />
                 </linearGradient>
               ))}
             </defs>
@@ -81,7 +88,7 @@ const TrafficGraph = ({ data, className }: TrafficGraphProps) => {
                 type="monotone"
                 dataKey={key}
                 name={key}
-                stroke={colors[key as keyof typeof colors] || `hsl(${index * 60}, 70%, 50%)`}
+                stroke={getColor(index)}
                 fillOpacity={1}
                 fill={`url(#color${key.replace(/\s+/g, '')})`}
                 animationDuration={1000}

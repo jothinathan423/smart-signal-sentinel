@@ -8,10 +8,47 @@ export interface TrafficData {
   pceDensity?: number;
   vehicleTypeCounts?: Record<string, number>;
   hasEmergencyVehicle: boolean;
+  emergencyCount?: number;
   timestamp: string;
   status?: "red" | "yellow" | "green";
   autoMode?: boolean;
   cameraStatus?: string;
+  zoneId?: string;
+}
+
+export interface SystemOverview {
+  monitored_intersections: number;
+  total_vehicles: number;
+  total_pce_density: number;
+  emergency_vehicles: number;
+  emergency_intersections: number;
+  active_cameras: number;
+  auto_mode_count: number;
+  total_zones: number;
+  active_emergency_corridors: number;
+  signal_controllers: number;
+  yolo_model: string;
+  cuda_available: boolean;
+}
+
+export interface SignalControllerStatus {
+  [intersectionId: string]: {
+    type: string;
+    status: string;
+    last_command: string | null;
+    last_sent_at: string | null;
+    failures: number;
+    total_commands: number;
+  };
+}
+
+export interface ZoneInfo {
+  id: string;
+  name: string;
+  intersection_count: number;
+  intersection_ids: string[];
+  emergency_corridor_active: boolean;
+  green_wave_enabled: boolean;
 }
 
 export interface ViolationData {
@@ -337,5 +374,130 @@ export const fetchIntersections = async (): Promise<IntersectionInfo[]> => {
   } catch (error) {
     console.error("Error fetching intersections:", error);
     return [];
+  }
+};
+
+// ============= System Overview (City-Scale Dashboard) =============
+
+export const fetchSystemOverview = async (): Promise<SystemOverview | null> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/stats/overview`);
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    console.error("Error fetching system overview:", error);
+    return null;
+  }
+};
+
+// ============= Signal Controller APIs =============
+
+export const fetchSignalControllers = async (): Promise<SignalControllerStatus> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/signal_controllers`);
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    console.error("Error fetching signal controllers:", error);
+    return {};
+  }
+};
+
+export const configureSignalController = async (
+  intersectionId: string,
+  config: { type: string; endpoint?: string; authToken?: string; broker?: string; port?: number; topic?: string; pins?: Record<string, number> }
+): Promise<boolean> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/signal_controllers/${intersectionId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    const result = await response.json();
+    if (result.success) {
+      toast.success(result.message || 'Signal controller configured');
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error("Error configuring signal controller:", error);
+    toast.error("Could not configure signal controller");
+    return false;
+  }
+};
+
+export const testSignalController = async (intersectionId: string, signal: string = 'green'): Promise<boolean> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/signal_controllers/${intersectionId}/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ signal }),
+    });
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    const result = await response.json();
+    if (result.success) {
+      toast.success('Test signal sent successfully');
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error("Error testing signal controller:", error);
+    toast.error("Could not test signal controller");
+    return false;
+  }
+};
+
+// ============= Zone Management APIs =============
+
+export const fetchZones = async (): Promise<ZoneInfo[]> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/zones`);
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    console.error("Error fetching zones:", error);
+    return [];
+  }
+};
+
+export const createZone = async (zoneId: string, name: string, intersectionIds: string[]): Promise<boolean> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/zones`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ zoneId, name, intersectionIds }),
+    });
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    const result = await response.json();
+    if (result.success) {
+      toast.success(`Zone "${name}" created`);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error("Error creating zone:", error);
+    toast.error("Could not create zone");
+    return false;
+  }
+};
+
+export const activateEmergencyCorridor = async (zoneId: string, path: string[], vehicleId?: string): Promise<boolean> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/zones/${zoneId}/emergency_corridor`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, vehicleId }),
+    });
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    const result = await response.json();
+    if (result.success) {
+      toast.success('Emergency corridor activated');
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error("Error activating emergency corridor:", error);
+    return false;
   }
 };

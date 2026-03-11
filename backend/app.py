@@ -10,6 +10,12 @@ from datetime import datetime, timedelta
 import random
 import json
 from collections import deque
+import requests as http_requests
+import logging
+
+# Configure logging for city-scale operations
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+logger = logging.getLogger(__name__)
 
 # Try importing ultralytics for YOLOv11
 try:
@@ -51,6 +57,366 @@ if PYMONGO_AVAILABLE:
     except Exception as e:
         print(f"Warning: Could not connect to MongoDB: {e}")
         print("Vehicle violations will not be stored in database")
+
+# ============= SIGNAL CONTROLLER INTEGRATION =============
+# Sends commands to physical traffic signal hardware via HTTP/MQTT/GPIO
+signal_controller_lock = threading.Lock()
+
+class SignalController:
+    """Manages communication with physical traffic signal controllers"""
+
+    def __init__(self):
+        self.controllers = {}  # {intersection_id: controller_config}
+        self.command_queue = deque(maxlen=10000)
+        self.command_history = deque(maxlen=5000)
+        self._running = True
+        self._sender_thread = threading.Thread(target=self._command_sender, daemon=True)
+        self._sender_thread.start()
+
+    def register_controller(self, intersection_id, config):
+        """Register a signal controller for an intersection.
+        config: {
+            'type': 'http' | 'mqtt' | 'gpio' | 'mock',
+            'endpoint': 'http://192.168.1.x:8080/signal',
+            'auth_token': 'optional',
+            'timeout': 5,
+            'retry_count': 3,
+        }
+        """
+        with signal_controller_lock:
+            self.controllers[intersection_id] = {
+                **config,
+                'last_command': None,
+                'last_response': None,
+                'last_sent_at': None,
+                'failures': 0,
+                'total_commands': 0,
+                'status': 'registered',
+            }
+        logger.info(f"Signal controller registered for {intersection_id}: {config.get('type', 'http')}")
+
+    def unregister_controller(self, intersection_id):
+        with signal_controller_lock:
+            self.controllers.pop(intersection_id, None)
+
+    def send_signal(self, intersection_id, signal_state, priority="normal"):
+        """Queue a signal command to be sent to the physical controller"""
+        self.command_queue.append({
+            'intersection_id': intersection_id,
+            'signal': signal_state,
+            'priority': priority,
+            'timestamp': time.time(),
+            'queued_at': datetime.now().isoformat(),
+        })
+
+    def _command_sender(self):
+        """Background thread that processes the command queue"""
+        while self._running:
+            try:
+                if not self.command_queue:
+                    time.sleep(0.05)
+                    continue
+
+                cmd = self.command_queue.popleft()
+                int_id = cmd['intersection_id']
+
+                with signal_controller_lock:
+                    controller = self.controllers.get(int_id)
+
+                if not controller:
+                    continue  # No physical controller registered
+
+                ctrl_type = controller.get('type', 'mock')
+                success = False
+                response = None
+
+                try:
+                    if ctrl_type == 'http':
+                        success, response = self._send_http(controller, cmd)
+                    elif ctrl_type == 'mqtt':
+                        success, response = self._send_mqtt(controller, cmd)
+                    elif ctrl_type == 'gpio':
+                        success, response = self._send_gpio(controller, cmd)
+                    elif ctrl_type == 'mock':
+                        success, response = True, {'status': 'ok', 'mock': True}
+
+                    with signal_controller_lock:
+                        controller['last_command'] = cmd['signal']
+                        controller['last_response'] = response
+                        controller['last_sent_at'] = datetime.now().isoformat()
+                        controller['total_commands'] += 1
+                        if success:
+                            controller['failures'] = 0
+                            controller['status'] = 'connected'
+                        else:
+                            controller['failures'] += 1
+                            controller['status'] = 'error' if controller['failures'] > 3 else 'retrying'
+
+                except Exception as e:
+                    logger.error(f"Signal controller error for {int_id}: {e}")
+                    with signal_controller_lock:
+                        controller['failures'] += 1
+                        controller['status'] = 'error'
+
+                self.command_history.append({
+                    **cmd,
+                    'success': success,
+                    'response': str(response)[:200] if response else None,
+                    'sent_at': datetime.now().isoformat(),
+                })
+
+            except Exception as e:
+                logger.error(f"Command sender error: {e}")
+                time.sleep(0.1)
+
+    def _send_http(self, controller, cmd):
+        """Send signal command via HTTP REST API"""
+        endpoint = controller.get('endpoint', '')
+        if not endpoint:
+            return False, 'No endpoint configured'
+
+        headers = {'Content-Type': 'application/json'}
+        auth_token = controller.get('auth_token')
+        if auth_token:
+            headers['Authorization'] = f'Bearer {auth_token}'
+
+        payload = {
+            'intersection_id': cmd['intersection_id'],
+            'signal': cmd['signal'],
+            'priority': cmd['priority'],
+            'timestamp': cmd['queued_at'],
+        }
+
+        timeout = controller.get('timeout', 5)
+        retry_count = controller.get('retry_count', 3)
+
+        for attempt in range(retry_count):
+            try:
+                resp = http_requests.post(endpoint, json=payload, headers=headers, timeout=timeout)
+                if resp.status_code == 200:
+                    return True, resp.json() if resp.headers.get('content-type', '').startswith('application/json') else resp.text
+                logger.warning(f"HTTP signal send failed (attempt {attempt+1}): {resp.status_code}")
+            except http_requests.exceptions.Timeout:
+                logger.warning(f"HTTP signal timeout (attempt {attempt+1})")
+            except Exception as e:
+                logger.warning(f"HTTP signal error (attempt {attempt+1}): {e}")
+
+        return False, 'All retries failed'
+
+    def _send_mqtt(self, controller, cmd):
+        """Send signal command via MQTT (placeholder - requires paho-mqtt)"""
+        try:
+            import paho.mqtt.publish as publish
+            broker = controller.get('broker', 'localhost')
+            port = controller.get('port', 1883)
+            topic = controller.get('topic', f"traffic/signals/{cmd['intersection_id']}")
+
+            payload = json.dumps({
+                'signal': cmd['signal'],
+                'priority': cmd['priority'],
+                'timestamp': cmd['queued_at'],
+            })
+
+            publish.single(topic, payload, hostname=broker, port=port)
+            return True, {'published': True, 'topic': topic}
+        except ImportError:
+            logger.warning("paho-mqtt not installed. MQTT signal control unavailable.")
+            return False, 'paho-mqtt not installed'
+        except Exception as e:
+            return False, str(e)
+
+    def _send_gpio(self, controller, cmd):
+        """Send signal command via GPIO (for Raspberry Pi / embedded systems)"""
+        try:
+            import RPi.GPIO as GPIO
+            pins = controller.get('pins', {})
+            red_pin = pins.get('red', 17)
+            yellow_pin = pins.get('yellow', 27)
+            green_pin = pins.get('green', 22)
+
+            GPIO.setmode(GPIO.BCM)
+            for pin in [red_pin, yellow_pin, green_pin]:
+                GPIO.setup(pin, GPIO.OUT)
+                GPIO.output(pin, GPIO.LOW)
+
+            signal = cmd['signal']
+            if signal == 'red':
+                GPIO.output(red_pin, GPIO.HIGH)
+            elif signal == 'yellow':
+                GPIO.output(yellow_pin, GPIO.HIGH)
+            elif signal == 'green':
+                GPIO.output(green_pin, GPIO.HIGH)
+
+            return True, {'gpio': True, 'signal': signal}
+        except ImportError:
+            return False, 'RPi.GPIO not available (not on Raspberry Pi)'
+        except Exception as e:
+            return False, str(e)
+
+    def get_status(self):
+        """Get status of all signal controllers"""
+        with signal_controller_lock:
+            return {int_id: {
+                'type': c.get('type', 'unknown'),
+                'status': c.get('status', 'unknown'),
+                'last_command': c.get('last_command'),
+                'last_sent_at': c.get('last_sent_at'),
+                'failures': c.get('failures', 0),
+                'total_commands': c.get('total_commands', 0),
+            } for int_id, c in self.controllers.items()}
+
+    def get_command_history(self, limit=50):
+        return list(self.command_history)[-limit:]
+
+
+# Global signal controller instance
+signal_controller = SignalController()
+
+
+# ============= ZONE / REGION MANAGEMENT (City-Scale) =============
+# Zones group intersections for coordinated control across a city
+zone_registry = {}  # {zone_id: {name, intersection_ids, green_wave_config, ...}}
+zone_lock = threading.Lock()
+
+def create_zone(zone_id, name, intersection_ids=None, config=None):
+    """Create a traffic management zone"""
+    with zone_lock:
+        zone_registry[zone_id] = {
+            'id': zone_id,
+            'name': name,
+            'intersection_ids': intersection_ids or [],
+            'green_wave': {
+                'enabled': False,
+                'direction': 'north_south',  # or 'east_west'
+                'speed_kmh': 50,
+                'offset_seconds': {},  # {int_id: offset} for green wave timing
+            },
+            'emergency_corridor': {
+                'active': False,
+                'path': [],  # Ordered list of intersection IDs for green corridor
+                'vehicle_id': None,
+            },
+            'config': config or {},
+            'created_at': datetime.now().isoformat(),
+        }
+    logger.info(f"Zone created: {zone_id} ({name}) with {len(intersection_ids or [])} intersections")
+
+
+def activate_emergency_corridor(zone_id, path_intersection_ids, vehicle_id=None):
+    """Activate green corridor across a zone for emergency vehicles"""
+    with zone_lock:
+        zone = zone_registry.get(zone_id)
+        if not zone:
+            return False
+
+        zone['emergency_corridor'] = {
+            'active': True,
+            'path': path_intersection_ids,
+            'vehicle_id': vehicle_id,
+            'activated_at': datetime.now().isoformat(),
+        }
+
+    # Set all intersections in path to green, others to red
+    with data_lock:
+        for int_id in path_intersection_ids:
+            idata = intersection_registry.get(int_id)
+            if idata:
+                idata['signal'] = 'green'
+                idata['has_emergency'] = True
+                idata['auto_control']['last_change_time'] = time.time()
+                signal_controller.send_signal(int_id, 'green', priority='emergency')
+
+                # Log emergency event to DB
+                log_emergency_event(int_id, 'green_corridor_activated', {
+                    'zone_id': zone_id,
+                    'vehicle_id': vehicle_id,
+                    'path': path_intersection_ids,
+                })
+
+        # Set non-path intersections in this zone to red
+        for int_id in zone.get('intersection_ids', []):
+            if int_id not in path_intersection_ids:
+                idata = intersection_registry.get(int_id)
+                if idata and idata['signal'] != 'red':
+                    idata['signal'] = 'red'
+                    signal_controller.send_signal(int_id, 'red', priority='emergency')
+
+    logger.info(f"Emergency corridor activated in zone {zone_id}: {path_intersection_ids}")
+    return True
+
+
+def deactivate_emergency_corridor(zone_id):
+    """Deactivate emergency corridor and resume normal operations"""
+    with zone_lock:
+        zone = zone_registry.get(zone_id)
+        if not zone:
+            return False
+        zone['emergency_corridor'] = {'active': False, 'path': [], 'vehicle_id': None}
+
+    with data_lock:
+        for int_id in zone.get('intersection_ids', []):
+            idata = intersection_registry.get(int_id)
+            if idata:
+                idata['has_emergency'] = False
+
+    logger.info(f"Emergency corridor deactivated in zone {zone_id}")
+    return True
+
+
+# ============= EMERGENCY & SIGNAL HISTORY LOGGING =============
+emergency_events_collection = None
+signal_history_collection = None
+
+if PYMONGO_AVAILABLE and db is not None:
+    try:
+        emergency_events_collection = db["emergency_events"]
+        signal_history_collection = db["signal_history"]
+        # Create indexes for efficient querying at city scale
+        emergency_events_collection.create_index([("timestamp", -1)])
+        emergency_events_collection.create_index([("intersection_id", 1)])
+        signal_history_collection.create_index([("timestamp", -1)])
+        signal_history_collection.create_index([("intersection_id", 1)])
+        violations_collection.create_index([("timestamp", -1)])
+        violations_collection.create_index([("type", 1)])
+        logger.info("Database indexes created for city-scale operations")
+    except Exception as e:
+        logger.warning(f"Could not create DB indexes: {e}")
+
+
+def log_emergency_event(int_id, event_type, data):
+    """Log emergency events to centralized database"""
+    event = {
+        'intersection_id': int_id,
+        'event_type': event_type,
+        'data': data,
+        'timestamp': datetime.now().isoformat(),
+    }
+    if emergency_events_collection is not None:
+        try:
+            emergency_events_collection.insert_one(event)
+        except Exception as e:
+            logger.error(f"Error logging emergency event: {e}")
+
+
+def log_signal_change(int_id, old_signal, new_signal, reason="auto"):
+    """Log signal changes to centralized database for audit trail"""
+    entry = {
+        'intersection_id': int_id,
+        'old_signal': old_signal,
+        'new_signal': new_signal,
+        'reason': reason,
+        'timestamp': datetime.now().isoformat(),
+    }
+    if signal_history_collection is not None:
+        try:
+            signal_history_collection.insert_one(entry)
+        except Exception as e:
+            logger.error(f"Error logging signal change: {e}")
+
+    # Also send to physical signal controller
+    signal_controller.send_signal(int_id, new_signal,
+                                  priority='emergency' if reason == 'emergency' else 'normal')
+
 
 # ============= DYNAMIC INTERSECTION REGISTRY =============
 # All intersection data is stored here - intersections can be added/removed at runtime
@@ -124,15 +490,28 @@ def create_intersection_data(intersection_id, name, camera_source="0", camera_ty
         "camera_type": camera_type,
         "camera_status": "configured",
 
+        # Location (for city-scale mapping)
+        "latitude": 0.0,
+        "longitude": 0.0,
+        "zone_id": None,
+
         # Traffic data
         "vehicle_count": 0,
         "pce_density": 0.0,  # PCE-weighted traffic density
         "vehicle_type_counts": {},  # {type: count} for PCE breakdown
         "has_emergency": False,
+        "emergency_count": 0,
         "timestamp": "",
 
         # Signal
         "signal": "red",
+        "signal_controller": {
+            "type": "mock",  # 'http', 'mqtt', 'gpio', 'mock'
+            "endpoint": "",
+            "auth_token": "",
+            "timeout": 5,
+            "retry_count": 3,
+        },
         "auto_control": {
             "enabled": False,
             "last_change_time": time.time(),
@@ -501,29 +880,42 @@ def update_signal_automatic(int_id):
         else:
             new_signal = "red"
 
+        old_signal = idata["signal"]
         idata["signal"] = new_signal
         idata["auto_control"]["last_change_time"] = current_time
+
+        # Log signal change and send to physical controller
+        log_signal_change(int_id, old_signal, new_signal, "auto_pce_based")
 
         # Coordinate: when this goes green, others go red
         if new_signal == "green":
             for other_id, other_data in intersection_registry.items():
                 if other_id != int_id and other_data["auto_control"]["enabled"]:
                     if other_data["signal"] != "yellow":
+                        old_other = other_data["signal"]
                         other_data["signal"] = "red"
+                        if old_other != "red":
+                            log_signal_change(other_id, old_other, "red", "coordination")
 
         elif new_signal == "red":
-            # Find next intersection that should get green
-            all_ids = list(intersection_registry.keys())
-            idx = all_ids.index(int_id) if int_id in all_ids else -1
-            if idx >= 0:
-                next_idx = (idx + 1) % len(all_ids)
-                next_id = all_ids[next_idx]
-                next_data = intersection_registry[next_id]
-                if next_data["auto_control"]["enabled"] and next_data["signal"] == "red":
+            # Find next intersection that should get green (round-robin within zone or all)
+            zone_id = idata.get("zone_id")
+            if zone_id and zone_id in zone_registry:
+                candidate_ids = zone_registry[zone_id].get("intersection_ids", [])
+            else:
+                candidate_ids = list(intersection_registry.keys())
+
+            idx = candidate_ids.index(int_id) if int_id in candidate_ids else -1
+            if idx >= 0 and len(candidate_ids) > 1:
+                next_idx = (idx + 1) % len(candidate_ids)
+                next_id = candidate_ids[next_idx]
+                next_data = intersection_registry.get(next_id)
+                if next_data and next_data["auto_control"]["enabled"] and next_data["signal"] == "red":
                     if current_time - next_data["auto_control"]["last_change_time"] > 5:
                         next_data["signal"] = "green"
                         next_data["auto_control"]["last_change_time"] = current_time
                         next_data["vehicles_crossed_stop_line"].clear()
+                        log_signal_change(next_id, "red", "green", "coordination")
 
 
 # ============= PATTERN LEARNING THREAD =============
@@ -860,15 +1252,28 @@ def detect_vehicles(int_id):
                     idata["has_emergency"] = has_emergency
                     idata["timestamp"] = datetime.now().isoformat()
 
-                    # Emergency priority
-                    if has_emergency and idata["signal"] != "green":
-                        idata["signal"] = "green"
-                        idata["auto_control"]["last_change_time"] = time.time()
-                        idata["vehicles_crossed_stop_line"].clear()
+                    # Emergency priority - green corridor creation
+                    if has_emergency:
+                        idata["emergency_count"] = sum(1 for v in current_vehicles if v.get("is_emergency"))
+                        if idata["signal"] != "green":
+                            old_sig = idata["signal"]
+                            idata["signal"] = "green"
+                            idata["auto_control"]["last_change_time"] = time.time()
+                            idata["vehicles_crossed_stop_line"].clear()
+                            log_signal_change(int_id, old_sig, "green", "emergency")
+                            log_emergency_event(int_id, "emergency_vehicle_detected", {
+                                "vehicle_count": idata["emergency_count"],
+                                "corridor": "activated",
+                            })
 
-                        for other_id, other_data in intersection_registry.items():
-                            if other_id != int_id and other_data["signal"] != "yellow":
-                                other_data["signal"] = "red"
+                            for other_id, other_data in intersection_registry.items():
+                                if other_id != int_id and other_data["signal"] != "yellow":
+                                    old_other = other_data["signal"]
+                                    other_data["signal"] = "red"
+                                    if old_other != "red":
+                                        log_signal_change(other_id, old_other, "red", "emergency_priority")
+                    else:
+                        idata["emergency_count"] = 0
 
                 # Vehicle count and PCE density overlay
                 cv2.putText(display_frame, f"Vehicles: {vehicle_count} | PCE: {pce_density:.1f}", (10, h_frame - 15),
@@ -1070,10 +1475,12 @@ def get_traffic_data():
                 "pceDensity": idata.get("pce_density", 0.0),
                 "vehicleTypeCounts": idata.get("vehicle_type_counts", {}),
                 "hasEmergencyVehicle": idata["has_emergency"],
+                "emergencyCount": idata.get("emergency_count", 0),
                 "timestamp": idata["timestamp"],
                 "status": idata["signal"],
                 "autoMode": idata["auto_control"]["enabled"],
                 "cameraStatus": idata["camera_status"],
+                "zoneId": idata.get("zone_id"),
             })
     return jsonify(result)
 
@@ -1096,9 +1503,13 @@ def update_signal():
         if idata["auto_control"]["enabled"]:
             return jsonify({"success": False, "error": "Cannot change signal while auto mode is enabled"}), 400
 
+        old_signal = idata["signal"]
         idata["signal"] = status
         if status == "green":
             idata["vehicles_crossed_stop_line"].clear()
+
+    # Log and send to physical signal controller
+    log_signal_change(int_id, old_signal, status, "manual")
 
     return jsonify({"success": True})
 
@@ -1308,11 +1719,34 @@ def add_intersection():
     if not int_id:
         return jsonify({"success": False, "error": "intersectionId required"}), 400
 
+    # Optional: signal controller, location, zone
+    signal_ctrl = data.get('signalController', {})
+    latitude = data.get('latitude', 0.0)
+    longitude = data.get('longitude', 0.0)
+    zone_id = data.get('zoneId')
+
     with data_lock:
         if int_id in intersection_registry:
             return jsonify({"success": False, "error": f"Intersection {int_id} already exists"}), 409
 
-        intersection_registry[int_id] = create_intersection_data(int_id, name, str(camera_source), camera_type)
+        idata = create_intersection_data(int_id, name, str(camera_source), camera_type)
+        idata['latitude'] = latitude
+        idata['longitude'] = longitude
+        idata['zone_id'] = zone_id
+        if signal_ctrl:
+            idata['signal_controller'] = signal_ctrl
+        intersection_registry[int_id] = idata
+
+    # Register signal controller if configured
+    if signal_ctrl and signal_ctrl.get('type') and signal_ctrl.get('type') != 'mock':
+        signal_controller.register_controller(int_id, signal_ctrl)
+
+    # Add to zone if specified
+    if zone_id:
+        with zone_lock:
+            zone = zone_registry.get(zone_id)
+            if zone and int_id not in zone['intersection_ids']:
+                zone['intersection_ids'].append(int_id)
 
     # Start detection
     start_detection_thread(int_id)
@@ -1373,6 +1807,284 @@ def get_congestion():
                 "is_peak_hour": idata["predictions"].get("is_peak_hour", False),
             }
     return jsonify(result)
+
+
+# ============= ZONE MANAGEMENT APIs =============
+
+@app.route('/api/zones', methods=['GET'])
+def list_zones():
+    """List all traffic management zones"""
+    with zone_lock:
+        result = []
+        for zid, zone in zone_registry.items():
+            result.append({
+                'id': zid,
+                'name': zone['name'],
+                'intersection_count': len(zone['intersection_ids']),
+                'intersection_ids': zone['intersection_ids'],
+                'emergency_corridor_active': zone['emergency_corridor']['active'],
+                'green_wave_enabled': zone['green_wave']['enabled'],
+            })
+    return jsonify(result)
+
+
+@app.route('/api/zones', methods=['POST'])
+def create_zone_endpoint():
+    """Create a new zone"""
+    data = request.json
+    zone_id = data.get('zoneId')
+    name = data.get('name', f'Zone {zone_id}')
+    intersection_ids = data.get('intersectionIds', [])
+
+    if not zone_id:
+        return jsonify({"success": False, "error": "zoneId required"}), 400
+
+    with zone_lock:
+        if zone_id in zone_registry:
+            return jsonify({"success": False, "error": "Zone already exists"}), 409
+
+    create_zone(zone_id, name, intersection_ids)
+
+    # Update intersection zone assignments
+    with data_lock:
+        for int_id in intersection_ids:
+            idata = intersection_registry.get(int_id)
+            if idata:
+                idata['zone_id'] = zone_id
+
+    return jsonify({"success": True, "message": f"Zone {zone_id} created"})
+
+
+@app.route('/api/zones/<zone_id>', methods=['DELETE'])
+def delete_zone(zone_id):
+    """Delete a zone"""
+    with zone_lock:
+        if zone_id not in zone_registry:
+            return jsonify({"success": False, "error": "Zone not found"}), 404
+        zone = zone_registry.pop(zone_id)
+
+    # Clear zone assignment from intersections
+    with data_lock:
+        for int_id in zone.get('intersection_ids', []):
+            idata = intersection_registry.get(int_id)
+            if idata:
+                idata['zone_id'] = None
+
+    return jsonify({"success": True})
+
+
+@app.route('/api/zones/<zone_id>/intersections', methods=['POST'])
+def add_intersection_to_zone(zone_id):
+    """Add an intersection to a zone"""
+    data = request.json
+    int_id = data.get('intersectionId')
+
+    with zone_lock:
+        zone = zone_registry.get(zone_id)
+        if not zone:
+            return jsonify({"success": False, "error": "Zone not found"}), 404
+        if int_id not in zone['intersection_ids']:
+            zone['intersection_ids'].append(int_id)
+
+    with data_lock:
+        idata = intersection_registry.get(int_id)
+        if idata:
+            idata['zone_id'] = zone_id
+
+    return jsonify({"success": True})
+
+
+@app.route('/api/zones/<zone_id>/emergency_corridor', methods=['POST'])
+def activate_corridor_endpoint(zone_id):
+    """Activate emergency green corridor across a zone"""
+    data = request.json
+    path = data.get('path', [])
+    vehicle_id = data.get('vehicleId')
+
+    if not path:
+        # Default: use all intersections in zone
+        with zone_lock:
+            zone = zone_registry.get(zone_id)
+            if zone:
+                path = zone['intersection_ids']
+
+    success = activate_emergency_corridor(zone_id, path, vehicle_id)
+    return jsonify({"success": success})
+
+
+@app.route('/api/zones/<zone_id>/emergency_corridor', methods=['DELETE'])
+def deactivate_corridor_endpoint(zone_id):
+    """Deactivate emergency corridor"""
+    success = deactivate_emergency_corridor(zone_id)
+    return jsonify({"success": success})
+
+
+# ============= SIGNAL CONTROLLER APIs =============
+
+@app.route('/api/signal_controllers', methods=['GET'])
+def get_signal_controllers():
+    """Get status of all signal controllers"""
+    return jsonify(signal_controller.get_status())
+
+
+@app.route('/api/signal_controllers/<int_id>', methods=['POST'])
+def configure_signal_controller(int_id):
+    """Register/update a signal controller for an intersection"""
+    data = request.json
+    config = {
+        'type': data.get('type', 'http'),
+        'endpoint': data.get('endpoint', ''),
+        'auth_token': data.get('authToken', ''),
+        'timeout': data.get('timeout', 5),
+        'retry_count': data.get('retryCount', 3),
+        'broker': data.get('broker', 'localhost'),
+        'port': data.get('port', 1883),
+        'topic': data.get('topic', f'traffic/signals/{int_id}'),
+        'pins': data.get('pins', {'red': 17, 'yellow': 27, 'green': 22}),
+    }
+
+    signal_controller.register_controller(int_id, config)
+
+    # Also save to intersection data
+    with data_lock:
+        idata = intersection_registry.get(int_id)
+        if idata:
+            idata['signal_controller'] = config
+
+    return jsonify({"success": True, "message": f"Signal controller configured for {int_id}"})
+
+
+@app.route('/api/signal_controllers/<int_id>', methods=['DELETE'])
+def remove_signal_controller(int_id):
+    """Remove a signal controller"""
+    signal_controller.unregister_controller(int_id)
+    return jsonify({"success": True})
+
+
+@app.route('/api/signal_controllers/history', methods=['GET'])
+def get_signal_command_history():
+    """Get recent signal command history"""
+    limit = request.args.get('limit', 50, type=int)
+    return jsonify(signal_controller.get_command_history(limit))
+
+
+@app.route('/api/signal_controllers/<int_id>/test', methods=['POST'])
+def test_signal_controller(int_id):
+    """Test a signal controller by sending a test command"""
+    data = request.json or {}
+    test_signal = data.get('signal', 'green')
+
+    signal_controller.send_signal(int_id, test_signal, priority='test')
+    return jsonify({"success": True, "message": f"Test command sent: {test_signal}"})
+
+
+# ============= BULK OPERATIONS (City-Scale) =============
+
+@app.route('/api/bulk/signals', methods=['POST'])
+def bulk_signal_update():
+    """Bulk update signals across multiple intersections"""
+    data = request.json
+    updates = data.get('updates', [])  # [{intersectionId, signal}]
+    results = []
+
+    with data_lock:
+        for update in updates:
+            int_id = update.get('intersectionId')
+            new_signal = update.get('signal')
+            idata = intersection_registry.get(int_id)
+
+            if idata and new_signal in ("red", "yellow", "green"):
+                old_signal = idata['signal']
+                idata['signal'] = new_signal
+                log_signal_change(int_id, old_signal, new_signal, "bulk_manual")
+                results.append({"intersectionId": int_id, "success": True})
+            else:
+                results.append({"intersectionId": int_id, "success": False, "error": "Invalid"})
+
+    return jsonify({"success": True, "results": results})
+
+
+@app.route('/api/bulk/auto_control', methods=['POST'])
+def bulk_auto_control():
+    """Bulk enable/disable auto control"""
+    data = request.json
+    intersection_ids = data.get('intersectionIds', [])
+    enabled = data.get('enabled', True)
+
+    with data_lock:
+        for int_id in intersection_ids:
+            idata = intersection_registry.get(int_id)
+            if idata:
+                idata['auto_control']['enabled'] = enabled
+                idata['auto_control']['last_change_time'] = time.time()
+
+    return jsonify({"success": True, "updated": len(intersection_ids)})
+
+
+@app.route('/api/stats/overview', methods=['GET'])
+def get_system_overview():
+    """Get system-wide statistics for dashboard"""
+    with data_lock:
+        total_vehicles = sum(d['vehicle_count'] for d in intersection_registry.values())
+        total_pce = sum(d.get('pce_density', 0) for d in intersection_registry.values())
+        emergency_count = sum(1 for d in intersection_registry.values() if d['has_emergency'])
+        total_emergency_vehicles = sum(d.get('emergency_count', 0) for d in intersection_registry.values())
+        active_cameras = sum(1 for d in intersection_registry.values() if d['camera_status'] == 'active')
+        auto_mode_count = sum(1 for d in intersection_registry.values() if d['auto_control']['enabled'])
+
+    with zone_lock:
+        active_corridors = sum(1 for z in zone_registry.values() if z['emergency_corridor']['active'])
+
+    return jsonify({
+        'monitored_intersections': len(intersection_registry),
+        'total_vehicles': total_vehicles,
+        'total_pce_density': round(total_pce, 1),
+        'emergency_vehicles': total_emergency_vehicles,
+        'emergency_intersections': emergency_count,
+        'active_cameras': active_cameras,
+        'auto_mode_count': auto_mode_count,
+        'total_zones': len(zone_registry),
+        'active_emergency_corridors': active_corridors,
+        'signal_controllers': len(signal_controller.controllers),
+        'yolo_model': YOLO_MODEL_NAME,
+        'cuda_available': _has_cuda(),
+    })
+
+
+@app.route('/api/emergency_events', methods=['GET'])
+def get_emergency_events():
+    """Get recent emergency events"""
+    if emergency_events_collection is not None:
+        try:
+            limit = request.args.get('limit', 50, type=int)
+            cursor = emergency_events_collection.find().sort("timestamp", -1).limit(limit)
+            events = []
+            for doc in cursor:
+                doc['id'] = str(doc.pop('_id'))
+                events.append(doc)
+            return jsonify(events)
+        except Exception as e:
+            logger.error(f"Error getting emergency events: {e}")
+    return jsonify([])
+
+
+@app.route('/api/signal_history', methods=['GET'])
+def get_signal_history():
+    """Get signal change history"""
+    if signal_history_collection is not None:
+        try:
+            limit = request.args.get('limit', 100, type=int)
+            int_id = request.args.get('intersectionId')
+            query = {"intersection_id": int_id} if int_id else {}
+            cursor = signal_history_collection.find(query).sort("timestamp", -1).limit(limit)
+            history = []
+            for doc in cursor:
+                doc['id'] = str(doc.pop('_id'))
+                history.append(doc)
+            return jsonify(history)
+        except Exception as e:
+            logger.error(f"Error getting signal history: {e}")
+    return jsonify([])
 
 
 # ============= MAIN =============

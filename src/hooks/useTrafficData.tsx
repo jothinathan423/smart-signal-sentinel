@@ -7,7 +7,9 @@ import {
   checkTrafficViolations,
   fetchViolations,
   ViolationData,
-  toggleAutoMode
+  toggleAutoMode,
+  fetchSystemOverview,
+  SystemOverview,
 } from "@/lib/api";
 import { toast } from "sonner";
 
@@ -18,9 +20,12 @@ export interface Intersection {
   vehicleCount: number;
   status: "red" | "yellow" | "green";
   emergency: boolean;
+  emergencyCount: number;
   lastUpdated: string;
   autoMode?: boolean;
   cameraStatus?: string;
+  pceDensity?: number;
+  zoneId?: string;
 }
 
 // Define the history data point structure
@@ -37,6 +42,7 @@ export const useTrafficData = () => {
   const [cameraUrls, setCameraUrls] = useState<Record<string, string>>({});
   const [violations, setViolations] = useState<ViolationData[]>([]);
   const [loadingViolations, setLoadingViolations] = useState(false);
+  const [systemOverview, setSystemOverview] = useState<SystemOverview | null>(null);
 
   // Build camera URLs from intersection data - MJPEG streams are continuous,
   // so we only set the URL once per intersection (no timestamp cache-busting needed)
@@ -66,7 +72,14 @@ export const useTrafficData = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const data = await fetchTrafficData();
+        const [data, overview] = await Promise.all([
+          fetchTrafficData(),
+          fetchSystemOverview(),
+        ]);
+
+        if (overview) {
+          setSystemOverview(overview);
+        }
 
         if (!data || data.length === 0) {
           if (!loading) return; // Don't show error on subsequent empty fetches
@@ -80,9 +93,12 @@ export const useTrafficData = () => {
           vehicleCount: item.vehicleCount,
           status: item.status || "red" as const,
           emergency: item.hasEmergencyVehicle,
+          emergencyCount: item.emergencyCount || 0,
           lastUpdated: item.timestamp ? new Date(item.timestamp).toLocaleTimeString() : 'N/A',
           autoMode: item.autoMode || false,
           cameraStatus: item.cameraStatus,
+          pceDensity: item.pceDensity || 0,
+          zoneId: item.zoneId,
         }));
 
         setIntersections(updatedIntersections);
@@ -203,5 +219,6 @@ export const useTrafficData = () => {
     checkViolations,
     refreshViolations: loadViolations,
     toggleAutoTrafficControl,
+    systemOverview,
   };
 };
