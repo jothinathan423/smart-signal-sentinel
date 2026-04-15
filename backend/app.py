@@ -12,6 +12,14 @@ import json
 from collections import deque
 import requests as http_requests
 import logging
+from functools import wraps
+
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 # Configure logging for city-scale operations
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
@@ -38,21 +46,56 @@ except ImportError:
 app = Flask(__name__)
 CORS(app)
 
+# ============= API KEY AUTHENTICATION =============
+API_KEY = os.getenv("API_KEY", "")  # Set in .env for production; empty = no auth
+
+def require_api_key(f):
+    """Decorator to require API key for sensitive endpoints"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not API_KEY:
+            return f(*args, **kwargs)  # No key configured = open access
+        key = request.headers.get("X-API-Key") or request.args.get("api_key")
+        if key != API_KEY:
+            return jsonify({"success": False, "error": "Unauthorized: invalid or missing API key"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+# ============= CUDA CACHE =============
+_cuda_available = None
+
+def _has_cuda():
+    """Check if CUDA is available (cached at first call)"""
+    global _cuda_available
+    if _cuda_available is None:
+        try:
+            import torch
+            _cuda_available = torch.cuda.is_available()
+        except ImportError:
+            _cuda_available = False
+        logger.info(f"CUDA available: {_cuda_available}")
+    return _cuda_available
+
 # ============= MONGODB SETUP =============
+MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017/")
 mongo_client = None
 db = None
 violations_collection = None
 patterns_collection = None
 learning_logs_collection = None
+intersections_collection = None
+zones_collection = None
 
 if PYMONGO_AVAILABLE:
     try:
-        mongo_client = pymongo.MongoClient("mongodb://localhost:27017/", serverSelectionTimeoutMS=2000)
+        mongo_client = pymongo.MongoClient(MONGODB_URI, serverSelectionTimeoutMS=2000)
         mongo_client.server_info()
         db = mongo_client["traffic_management"]
         violations_collection = db["violations"]
         patterns_collection = db["traffic_patterns"]
         learning_logs_collection = db["learning_logs"]
+        intersections_collection = db["intersections"]
+        zones_collection = db["zones"]
         print("Successfully connected to MongoDB")
     except Exception as e:
         print(f"Warning: Could not connect to MongoDB: {e}")
@@ -352,9 +395,11 @@ def deactivate_emergency_corridor(zone_id):
         if not zone:
             return False
         zone['emergency_corridor'] = {'active': False, 'path': [], 'vehicle_id': None}
+        # Copy intersection IDs while still holding the lock
+        zone_intersection_ids = list(zone.get('intersection_ids', []))
 
     with data_lock:
-        for int_id in zone.get('intersection_ids', []):
+        for int_id in zone_intersection_ids:
             idata = intersection_registry.get(int_id)
             if idata:
                 idata['has_emergency'] = False
@@ -474,9 +519,12 @@ TWO_WHEELER_CONFIG = {
 
 # Emergency vehicle detection config
 EMERGENCY_CONFIG = {
-    "min_size": 60,
-    "red_threshold": 4.0,
-    "blue_threshold": 4.0,
+    "min_size": 80,            # Minimum bounding box dimension in pixels
+    "min_area": 8000,          # Minimum bounding box area (w*h) to filter small vehicles
+    "red_threshold": 3.0,      # Minimum red color percentage
+    "blue_threshold": 3.0,     # Minimum blue color percentage
+    "require_both_colors": True,  # Require BOTH red AND blue (siren pattern) to reduce false positives
+    "top_region_ratio": 0.4,   # Only check top 40% of vehicle (where sirens are mounted)
 }
 
 
@@ -533,9 +581,12 @@ def create_intersection_data(intersection_id, name, camera_source="0", camera_ty
         "vehicle_speeds": {},  # {vehicle_id: speed_kmh}
         "next_vehicle_id": 1,
 
+        # Speed calibration (per-intersection, adjustable via API)
+        "pixels_per_meter": PIXELS_PER_METER,
+
         # Stop line / violations
         "stop_line": {"y_position": 350, "tolerance": 20},
-        "vehicles_crossed_stop_line": set(),
+        "vehicles_crossed_stop_line": [],  # list instead of set for JSON serialization
 
         # Frames
         "latest_frame": None,
@@ -548,18 +599,142 @@ def create_intersection_data(intersection_id, name, camera_source="0", camera_ty
 
 
 def init_default_intersections():
-    """Initialize default intersections"""
+    """Initialize default intersections only if no intersections exist"""
     with data_lock:
-        if "int-001" not in intersection_registry:
-            intersection_registry["int-001"] = create_intersection_data(
-                "int-001", "Main Street Intersection", "0", "usb"
-            )
-            intersection_registry["int-001"]["signal"] = "red"
-        if "int-002" not in intersection_registry:
-            intersection_registry["int-002"] = create_intersection_data(
-                "int-002", "Park Avenue Intersection", "1", "usb"
-            )
-            intersection_registry["int-002"]["signal"] = "green"
+        if len(intersection_registry) > 0:
+            return  # Already have intersections (loaded from DB or added at runtime)
+        intersection_registry["int-001"] = create_intersection_data(
+            "int-001", "Main Street Intersection", "0", "usb"
+        )
+        intersection_registry["int-001"]["signal"] = "red"
+        intersection_registry["int-002"] = create_intersection_data(
+            "int-002", "Park Avenue Intersection", "1", "usb"
+        )
+        intersection_registry["int-002"]["signal"] = "green"
+    logger.info("Initialized default intersections (int-001, int-002)")
+
+
+# ============= DATA PERSISTENCE (MongoDB) =============
+
+def _serializable_intersection(idata):
+    """Extract persistable fields from intersection data (skip threads, frames, sets)"""
+    return {
+        "id": idata["id"],
+        "name": idata["name"],
+        "camera_source": idata["camera_source"],
+        "camera_type": idata["camera_type"],
+        "latitude": idata.get("latitude", 0.0),
+        "longitude": idata.get("longitude", 0.0),
+        "zone_id": idata.get("zone_id"),
+        "signal": idata["signal"],
+        "pixels_per_meter": idata.get("pixels_per_meter", PIXELS_PER_METER),
+        "stop_line": idata.get("stop_line", {"y_position": 350, "tolerance": 20}),
+        "auto_control_enabled": idata["auto_control"]["enabled"],
+        "cycle_times": idata["auto_control"]["cycle_times"],
+        "vehicle_thresholds": idata["auto_control"]["vehicle_thresholds"],
+        "cycle_adjustments": idata["auto_control"]["cycle_adjustments"],
+    }
+
+
+def save_intersection_to_db(int_id):
+    """Persist a single intersection config to MongoDB"""
+    if intersections_collection is None:
+        return
+    idata = intersection_registry.get(int_id)
+    if not idata:
+        return
+    try:
+        doc = _serializable_intersection(idata)
+        intersections_collection.update_one(
+            {"id": int_id}, {"$set": doc}, upsert=True
+        )
+    except Exception as e:
+        logger.error(f"Error persisting intersection {int_id}: {e}")
+
+
+def remove_intersection_from_db(int_id):
+    """Remove an intersection from MongoDB"""
+    if intersections_collection is None:
+        return
+    try:
+        intersections_collection.delete_one({"id": int_id})
+    except Exception as e:
+        logger.error(f"Error removing intersection {int_id} from DB: {e}")
+
+
+def save_zone_to_db(zone_id):
+    """Persist a zone config to MongoDB"""
+    if zones_collection is None:
+        return
+    zone = zone_registry.get(zone_id)
+    if not zone:
+        return
+    try:
+        doc = {
+            "id": zone_id,
+            "name": zone["name"],
+            "intersection_ids": zone["intersection_ids"],
+            "green_wave": zone.get("green_wave", {}),
+            "config": zone.get("config", {}),
+        }
+        zones_collection.update_one({"id": zone_id}, {"$set": doc}, upsert=True)
+    except Exception as e:
+        logger.error(f"Error persisting zone {zone_id}: {e}")
+
+
+def remove_zone_from_db(zone_id):
+    """Remove a zone from MongoDB"""
+    if zones_collection is None:
+        return
+    try:
+        zones_collection.delete_one({"id": zone_id})
+    except Exception as e:
+        logger.error(f"Error removing zone {zone_id} from DB: {e}")
+
+
+def load_persisted_data():
+    """Load intersection and zone configs from MongoDB on startup"""
+    loaded_ints = 0
+    loaded_zones = 0
+
+    if intersections_collection is not None:
+        try:
+            for doc in intersections_collection.find():
+                int_id = doc["id"]
+                idata = create_intersection_data(
+                    int_id, doc.get("name", int_id),
+                    doc.get("camera_source", "0"), doc.get("camera_type", "usb")
+                )
+                idata["latitude"] = doc.get("latitude", 0.0)
+                idata["longitude"] = doc.get("longitude", 0.0)
+                idata["zone_id"] = doc.get("zone_id")
+                idata["signal"] = doc.get("signal", "red")
+                idata["pixels_per_meter"] = doc.get("pixels_per_meter", PIXELS_PER_METER)
+                idata["stop_line"] = doc.get("stop_line", {"y_position": 350, "tolerance": 20})
+                idata["auto_control"]["enabled"] = doc.get("auto_control_enabled", False)
+                if "cycle_times" in doc:
+                    idata["auto_control"]["cycle_times"] = doc["cycle_times"]
+                if "vehicle_thresholds" in doc:
+                    idata["auto_control"]["vehicle_thresholds"] = doc["vehicle_thresholds"]
+                if "cycle_adjustments" in doc:
+                    idata["auto_control"]["cycle_adjustments"] = doc["cycle_adjustments"]
+                with data_lock:
+                    intersection_registry[int_id] = idata
+                loaded_ints += 1
+        except Exception as e:
+            logger.error(f"Error loading intersections from DB: {e}")
+
+    if zones_collection is not None:
+        try:
+            for doc in zones_collection.find():
+                zid = doc["id"]
+                create_zone(zid, doc.get("name", zid), doc.get("intersection_ids", []),
+                            doc.get("config"))
+                loaded_zones += 1
+        except Exception as e:
+            logger.error(f"Error loading zones from DB: {e}")
+
+    logger.info(f"Loaded {loaded_ints} intersections and {loaded_zones} zones from MongoDB")
 
 
 # ============= YOLO MODEL LOADING =============
@@ -706,7 +881,8 @@ def calculate_vehicle_speed(int_id, vehicle_id, current_position, current_time):
     if time_diff <= 0:
         return 0
 
-    displacement_meters = displacement_pixels / PIXELS_PER_METER
+    ppm = idata.get("pixels_per_meter", PIXELS_PER_METER)
+    displacement_meters = displacement_pixels / ppm
     speed_mps = displacement_meters / time_diff
     speed_kmh = speed_mps * 3.6
 
@@ -729,7 +905,8 @@ def detect_red_light_violation(int_id, vehicle_id, vehicle_position):
         was_already_crossed = vehicle_id in idata["vehicles_crossed_stop_line"]
 
         if not was_already_crossed:
-            idata["vehicles_crossed_stop_line"].add(vehicle_id)
+            if vehicle_id not in idata["vehicles_crossed_stop_line"]:
+                idata["vehicles_crossed_stop_line"].append(vehicle_id)
             if current_signal == "red":
                 return True, "Vehicle crossed stop line during red signal"
 
@@ -744,52 +921,87 @@ def detect_speeding(int_id, vehicle_id):
 
 
 def detect_helmet(person_roi):
-    """Helmet detection using color and shape analysis"""
+    """Helmet detection using color analysis and edge density on head region.
+    Returns True if helmet is detected, False if not.
+    Uses top 40% of person ROI and checks for helmet-like color regions
+    plus high edge density (helmets have smooth, uniform surfaces).
+    """
     if person_roi is None or person_roi.size == 0:
-        return True
+        return True  # Assume helmet present if we can't check
 
     try:
         height, width = person_roi.shape[:2]
-        head_region = person_roi[0:int(height * 0.3), :]
+        if height < 20 or width < 15:
+            return True  # Too small to analyze reliably
 
+        # Use top 40% of person ROI for head region (increased from 30%)
+        head_region = person_roi[0:int(height * 0.4), :]
         if head_region.size == 0:
             return True
 
+        head_pixels = head_region.shape[0] * head_region.shape[1]
+        if head_pixels == 0:
+            return True
+
         hsv = cv2.cvtColor(head_region, cv2.COLOR_BGR2HSV)
-        helmet_detected = False
+        helmet_color_score = 0.0
 
         for color_name, (lower, upper) in TWO_WHEELER_CONFIG["helmet_color_ranges"].items():
             mask = cv2.inRange(hsv, np.array(lower), np.array(upper))
-            helmet_ratio = cv2.countNonZero(mask) / (head_region.shape[0] * head_region.shape[1])
+            ratio = cv2.countNonZero(mask) / head_pixels
+            helmet_color_score = max(helmet_color_score, ratio)
 
-            if helmet_ratio > 0.15:
-                helmet_detected = True
-                break
+        # Color match: if a strong helmet color covers >12% of head region
+        if helmet_color_score > 0.12:
+            return True
 
-        if not helmet_detected:
-            gray = cv2.cvtColor(head_region, cv2.COLOR_BGR2GRAY)
-            blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-            circles = cv2.HoughCircles(blurred, cv2.HOUGH_GRADIENT, 1, 20,
-                                       param1=50, param2=30, minRadius=10, maxRadius=50)
-            if circles is not None:
-                helmet_detected = True
+        # Edge density check: helmets produce distinct circular edges
+        gray = cv2.cvtColor(head_region, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        edges = cv2.Canny(blurred, 50, 150)
+        edge_ratio = cv2.countNonZero(edges) / head_pixels
 
-        return helmet_detected
+        # High edge density in head region suggests structured headgear
+        if edge_ratio > 0.15:
+            # Additional roundness check via contours
+            contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for cnt in contours:
+                area = cv2.contourArea(cnt)
+                perimeter = cv2.arcLength(cnt, True)
+                if perimeter > 0 and area > 100:
+                    circularity = 4 * np.pi * area / (perimeter * perimeter)
+                    if circularity > 0.4:  # Somewhat round shape
+                        return True
+
+        return False
     except Exception:
-        return True
+        return True  # Fail safe: assume helmet present
 
 
 def detect_emergency_vehicle(frame, x, y, w, h):
-    """Detect emergency vehicle by red/blue color analysis"""
+    """Detect emergency vehicle by red/blue siren color analysis on top region.
+    Requires both red AND blue presence (siren pattern) to reduce false positives
+    from regular red/blue colored vehicles.
+    """
     if w < EMERGENCY_CONFIG["min_size"] or h < EMERGENCY_CONFIG["min_size"]:
+        return False
+
+    if w * h < EMERGENCY_CONFIG.get("min_area", 8000):
         return False
 
     height, width = frame.shape[:2]
     if x < 0 or y < 0 or x + w >= width or y + h >= height:
         return False
 
-    vehicle_roi = frame[y:y + h, x:x + w]
-    hsv = cv2.cvtColor(vehicle_roi, cv2.COLOR_BGR2HSV)
+    # Only analyze the top portion of the vehicle (where sirens/lights are)
+    top_ratio = EMERGENCY_CONFIG.get("top_region_ratio", 0.4)
+    top_h = max(1, int(h * top_ratio))
+    vehicle_top_roi = frame[y:y + top_h, x:x + w]
+
+    if vehicle_top_roi.size == 0:
+        return False
+
+    hsv = cv2.cvtColor(vehicle_top_roi, cv2.COLOR_BGR2HSV)
 
     # Red detection (two ranges for red hue wrap-around)
     mask_red1 = cv2.inRange(hsv, np.array([0, 120, 70]), np.array([10, 255, 255]))
@@ -799,11 +1011,16 @@ def detect_emergency_vehicle(frame, x, y, w, h):
     # Blue detection
     mask_blue = cv2.inRange(hsv, np.array([100, 50, 50]), np.array([130, 255, 255]))
 
-    total_pixels = w * h
+    total_pixels = w * top_h
     red_percent = cv2.countNonZero(mask_red) / total_pixels * 100
     blue_percent = cv2.countNonZero(mask_blue) / total_pixels * 100
 
-    return red_percent > EMERGENCY_CONFIG["red_threshold"] or blue_percent > EMERGENCY_CONFIG["blue_threshold"]
+    if EMERGENCY_CONFIG.get("require_both_colors", True):
+        return (red_percent > EMERGENCY_CONFIG["red_threshold"] and
+                blue_percent > EMERGENCY_CONFIG["blue_threshold"])
+    else:
+        return (red_percent > EMERGENCY_CONFIG["red_threshold"] or
+                blue_percent > EMERGENCY_CONFIG["blue_threshold"])
 
 
 def count_people_on_vehicle(vehicle_roi, model):
@@ -819,30 +1036,6 @@ def count_people_on_vehicle(vehicle_roi, model):
     except Exception:
         return 0
 
-
-# ============= SIGNAL COORDINATION =============
-
-def coordinate_traffic_signals():
-    """Coordinate signals across all intersections"""
-    while True:
-        try:
-            with data_lock:
-                int_ids = list(intersection_registry.keys())
-                auto_ids = [iid for iid in int_ids if intersection_registry[iid]["auto_control"]["enabled"]]
-
-                if len(auto_ids) >= 2:
-                    # Ensure only one intersection has green at a time
-                    green_ids = [iid for iid in auto_ids if intersection_registry[iid]["signal"] == "green"]
-                    if len(green_ids) > 1:
-                        # Keep only the first green, set others to red
-                        for iid in green_ids[1:]:
-                            if intersection_registry[iid]["signal"] != "yellow":
-                                intersection_registry[iid]["signal"] = "red"
-
-            time.sleep(1)
-        except Exception as e:
-            print(f"Error in signal coordination: {e}")
-            time.sleep(1)
 
 
 def update_signal_automatic(int_id):
@@ -1199,7 +1392,7 @@ def detect_vehicles(int_id):
                             "bbox": (x1, y1, x2, y2),
                             "size": (w, h),
                             "is_emergency": is_emergency,
-                            "license_plate": generate_license_plate() if random.random() < 0.8 else None,
+                            "license_plate": generate_vehicle_plate_id(),
                             "helmet_violation": helmet_violation,
                             "passenger_violation": passenger_violation,
                             "speed_kmh": actual_speed,
@@ -1315,22 +1508,12 @@ def detect_vehicles(int_id):
     print(f"Detection stopped for {int_id}")
 
 
-def _has_cuda():
-    """Check if CUDA is available"""
-    try:
-        import torch
-        return torch.cuda.is_available()
-    except ImportError:
-        return False
-
-
-def generate_license_plate():
-    """Generate random license plate"""
-    letters = "ABCDEFGHJKLMNPQRSTUVWXYZ"
-    numbers = "0123456789"
-    return (''.join(random.choice(letters) for _ in range(2)) +
-            ''.join(random.choice(numbers) for _ in range(2)) +
-            ''.join(random.choice(letters) for _ in range(3)))
+def generate_vehicle_plate_id():
+    """Generate a tracking ID for vehicles without ANPR.
+    Returns 'N/A' to indicate no real plate recognition is available.
+    In production, integrate an ANPR/OCR module here.
+    """
+    return "N/A"
 
 
 def check_for_violations(int_id):
@@ -1486,6 +1669,7 @@ def get_traffic_data():
 
 
 @app.route('/api/traffic/signal', methods=['POST'])
+@require_api_key
 def update_signal():
     """Update traffic signal status"""
     data = request.json
@@ -1515,6 +1699,7 @@ def update_signal():
 
 
 @app.route('/api/traffic/auto_control', methods=['POST'])
+@require_api_key
 def toggle_auto_control():
     """Toggle automatic signal control"""
     data = request.json
@@ -1567,7 +1752,7 @@ def get_violations():
         return jsonify([
             {
                 "id": f"sim-{i}",
-                "vehicleNumber": generate_license_plate(),
+                "vehicleNumber": f"SIM-{random.randint(1000,9999)}",
                 "type": random.choice(["red_light", "speeding", "no_helmet", "excess_passengers"]),
                 "timestamp": (datetime.now() - timedelta(minutes=i)).isoformat(),
                 "location": random.choice([d["name"] for d in intersection_registry.values()] or ["Unknown"]),
@@ -1708,6 +1893,7 @@ def configure_camera():
 
 
 @app.route('/api/traffic/intersections', methods=['POST'])
+@require_api_key
 def add_intersection():
     """Add a new intersection/camera"""
     data = request.json
@@ -1748,6 +1934,9 @@ def add_intersection():
             if zone and int_id not in zone['intersection_ids']:
                 zone['intersection_ids'].append(int_id)
 
+    # Persist to database
+    save_intersection_to_db(int_id)
+
     # Start detection
     start_detection_thread(int_id)
 
@@ -1755,6 +1944,7 @@ def add_intersection():
 
 
 @app.route('/api/traffic/intersections/<int_id>', methods=['DELETE'])
+@require_api_key
 def remove_intersection(int_id):
     """Remove an intersection"""
     with data_lock:
@@ -1765,6 +1955,8 @@ def remove_intersection(int_id):
 
     with data_lock:
         del intersection_registry[int_id]
+
+    remove_intersection_from_db(int_id)
 
     return jsonify({"success": True, "message": f"Intersection {int_id} removed."})
 
@@ -1809,6 +2001,26 @@ def get_congestion():
     return jsonify(result)
 
 
+@app.route('/api/traffic/calibration/<int_id>', methods=['POST'])
+@require_api_key
+def set_speed_calibration(int_id):
+    """Set per-intersection speed calibration (pixels_per_meter)"""
+    data = request.json
+    ppm = data.get('pixels_per_meter')
+
+    if ppm is None or not isinstance(ppm, (int, float)) or ppm <= 0:
+        return jsonify({"success": False, "error": "pixels_per_meter must be a positive number"}), 400
+
+    with data_lock:
+        idata = intersection_registry.get(int_id)
+        if not idata:
+            return jsonify({"success": False, "error": "Intersection not found"}), 404
+        idata['pixels_per_meter'] = float(ppm)
+
+    save_intersection_to_db(int_id)
+    return jsonify({"success": True, "message": f"Speed calibration set to {ppm} px/m for {int_id}"})
+
+
 # ============= ZONE MANAGEMENT APIs =============
 
 @app.route('/api/zones', methods=['GET'])
@@ -1829,6 +2041,7 @@ def list_zones():
 
 
 @app.route('/api/zones', methods=['POST'])
+@require_api_key
 def create_zone_endpoint():
     """Create a new zone"""
     data = request.json
@@ -1852,10 +2065,13 @@ def create_zone_endpoint():
             if idata:
                 idata['zone_id'] = zone_id
 
+    save_zone_to_db(zone_id)
+
     return jsonify({"success": True, "message": f"Zone {zone_id} created"})
 
 
 @app.route('/api/zones/<zone_id>', methods=['DELETE'])
+@require_api_key
 def delete_zone(zone_id):
     """Delete a zone"""
     with zone_lock:
@@ -1869,6 +2085,8 @@ def delete_zone(zone_id):
             idata = intersection_registry.get(int_id)
             if idata:
                 idata['zone_id'] = None
+
+    remove_zone_from_db(zone_id)
 
     return jsonify({"success": True})
 
@@ -1928,6 +2146,7 @@ def get_signal_controllers():
 
 
 @app.route('/api/signal_controllers/<int_id>', methods=['POST'])
+@require_api_key
 def configure_signal_controller(int_id):
     """Register/update a signal controller for an intersection"""
     data = request.json
@@ -1981,6 +2200,7 @@ def test_signal_controller(int_id):
 # ============= BULK OPERATIONS (City-Scale) =============
 
 @app.route('/api/bulk/signals', methods=['POST'])
+@require_api_key
 def bulk_signal_update():
     """Bulk update signals across multiple intersections"""
     data = request.json
@@ -2005,6 +2225,7 @@ def bulk_signal_update():
 
 
 @app.route('/api/bulk/auto_control', methods=['POST'])
+@require_api_key
 def bulk_auto_control():
     """Bulk enable/disable auto control"""
     data = request.json
@@ -2109,13 +2330,9 @@ if __name__ == '__main__':
     else:
         print("WARNING: Model loading failed. Detection will not work.")
 
-    # Initialize default intersections
+    # Load persisted data from MongoDB, then init defaults if empty
+    load_persisted_data()
     init_default_intersections()
-
-    # Start signal coordination thread
-    coord_thread = threading.Thread(target=coordinate_traffic_signals, daemon=True)
-    coord_thread.start()
-    print("Started signal coordination thread")
 
     # Start pattern learning thread
     learn_thread = threading.Thread(target=pattern_learning_thread, daemon=True)

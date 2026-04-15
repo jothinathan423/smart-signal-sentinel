@@ -16,6 +16,7 @@ interface IntersectionProps {
   emergency: boolean;
   lastUpdated: string;
   autoMode?: boolean;
+  cameraStatus?: string;
   className?: string;
   onStatusChange?: (id: string, status: "red" | "yellow" | "green") => void;
   onAutoModeChange?: (id: string, enabled: boolean) => void;
@@ -29,10 +30,12 @@ const Intersection = ({
   emergency,
   lastUpdated,
   autoMode = false,
+  cameraStatus,
   className,
   onStatusChange,
   onAutoModeChange,
 }: IntersectionProps) => {
+  const isCameraActive = cameraStatus === "active";
   const handleStatusChange = (newStatus: "red" | "yellow" | "green") => {
     if (onStatusChange && !autoMode) {
       onStatusChange(id, newStatus);
@@ -48,7 +51,21 @@ const Intersection = ({
   return (
     <Card className={cn("overflow-hidden animate-fade-in", className)}>
       <CardHeader className="pb-2">
-        <CardTitle className="text-lg">{name}</CardTitle>
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-lg">{name}</CardTitle>
+          {cameraStatus && !isCameraActive && (
+            <span className={cn(
+              "text-xs px-2 py-0.5 rounded-full font-medium",
+              cameraStatus === "failed" ? "bg-destructive/10 text-destructive" :
+              cameraStatus === "reconnecting" ? "bg-yellow-100 text-yellow-800" :
+              "bg-muted text-muted-foreground"
+            )}>
+              {cameraStatus === "failed" ? "Camera Failed" :
+               cameraStatus === "reconnecting" ? "Reconnecting..." :
+               cameraStatus === "configured" ? "Connecting..." : cameraStatus}
+            </span>
+          )}
+        </div>
         <div className="text-xs text-muted-foreground">Last updated: {lastUpdated}</div>
       </CardHeader>
       <CardContent className="pb-2">
@@ -74,7 +91,7 @@ const Intersection = ({
             size="sm"
             className={cn(status === "red" && "bg-traffic-red/10 border-traffic-red/20 text-traffic-red")}
             onClick={() => handleStatusChange("red")}
-            disabled={autoMode}
+            disabled={autoMode || !isCameraActive}
           >
             Red
           </Button>
@@ -83,7 +100,7 @@ const Intersection = ({
             size="sm"
             className={cn(status === "yellow" && "bg-traffic-yellow/10 border-traffic-yellow/20 text-black")}
             onClick={() => handleStatusChange("yellow")}
-            disabled={autoMode}
+            disabled={autoMode || !isCameraActive}
           >
             Yellow
           </Button>
@@ -92,7 +109,7 @@ const Intersection = ({
             size="sm"
             className={cn(status === "green" && "bg-traffic-green/10 border-traffic-green/20 text-traffic-green")}
             onClick={() => handleStatusChange("green")}
-            disabled={autoMode}
+            disabled={autoMode || !isCameraActive}
           >
             Green
           </Button>
