@@ -501,3 +501,130 @@ export const activateEmergencyCorridor = async (zoneId: string, path: string[], 
     return false;
   }
 };
+
+// ============= SIMULATION APIs =============
+
+export interface SimulationConfig {
+  id: string;
+  name: string;
+  running: boolean;
+  auto_spawn: boolean;
+  spawn_rate: number;
+  spawn_types: Record<string, number>;
+  default_speed: number;
+  speed_variance: number;
+  signal: string;
+  vehicle_count: number;
+  total_spawned: number;
+  total_passed: number;
+}
+
+export const fetchSimulations = async (): Promise<SimulationConfig[]> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/simulation`);
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    console.error("Error fetching simulations:", error);
+    return [];
+  }
+};
+
+export const createSimulation = async (
+  intersectionId: string,
+  config: Partial<SimulationConfig> & { name?: string }
+): Promise<boolean> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/simulation/${intersectionId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    const result = await response.json();
+    if (result.success) {
+      toast.success(`Simulation started for ${intersectionId}`);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error("Error creating simulation:", error);
+    toast.error("Could not create simulation.");
+    return false;
+  }
+};
+
+export const updateSimulation = async (
+  intersectionId: string,
+  config: Partial<SimulationConfig>
+): Promise<boolean> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/simulation/${intersectionId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    return true;
+  } catch (error) {
+    console.error("Error updating simulation:", error);
+    return false;
+  }
+};
+
+export const deleteSimulation = async (intersectionId: string): Promise<boolean> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/simulation/${intersectionId}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    toast.success("Simulation stopped");
+    return true;
+  } catch (error) {
+    console.error("Error deleting simulation:", error);
+    return false;
+  }
+};
+
+export const spawnSimVehicle = async (
+  intersectionId: string,
+  options: { type?: string; direction?: string; speed?: number; lane?: number }
+): Promise<string | null> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/simulation/${intersectionId}/spawn`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(options),
+    });
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    const result = await response.json();
+    return result.vehicleId || null;
+  } catch (error) {
+    console.error("Error spawning vehicle:", error);
+    return null;
+  }
+};
+
+export const clearSimVehicles = async (intersectionId: string): Promise<boolean> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/simulation/${intersectionId}/clear`, {
+      method: 'POST',
+    });
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    return true;
+  } catch (error) {
+    console.error("Error clearing vehicles:", error);
+    return false;
+  }
+};
+
+export const fetchSimulationStatus = async (intersectionId: string): Promise<any> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/simulation/${intersectionId}/status`);
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    console.error("Error fetching simulation status:", error);
+    return null;
+  }
+};
