@@ -35,8 +35,8 @@ const Dashboard = () => {
   const [viewMode, setViewMode] = useState<"split" | "single">("split");
   const [activeIntersection, setActiveIntersection] = useState<string>("");
 
-  // Only show intersections with active cameras
-  const activeIntersections = intersections.filter(int => int.cameraStatus === "active");
+  // Show all intersections (including connecting/failed cameras with status badges)
+  const activeIntersections = intersections;
 
   const emergencyIntersections = activeIntersections.filter(int => int.emergency);
   const emergencyCount = emergencyIntersections.length;

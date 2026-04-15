@@ -131,7 +131,7 @@ export const useTrafficData = () => {
     fetchData();
     const interval = setInterval(fetchData, 3000);
     return () => clearInterval(interval);
-  }, [updateCameraUrls, loading]);
+  }, [updateCameraUrls]);
 
   // Update traffic signal status
   const updateTrafficStatus = useCallback(async (id: string, status: "red" | "yellow" | "green") => {
