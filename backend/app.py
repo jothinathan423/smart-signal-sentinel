@@ -2308,6 +2308,112 @@ def get_signal_history():
     return jsonify([])
 
 
+# ============= SIMULATION APIs =============
+
+from simulation import sim_manager
+
+@app.route('/api/simulation', methods=['GET'])
+def list_simulations():
+    """List all active simulations."""
+    return jsonify(sim_manager.list_simulations())
+
+
+@app.route('/api/simulation/<int_id>', methods=['POST'])
+def create_simulation(int_id):
+    """Create and start a simulation for an intersection."""
+    data = request.json or {}
+    name = data.get('name', f'Simulation {int_id}')
+
+    # Ensure intersection exists in registry
+    with data_lock:
+        if int_id not in intersection_registry:
+            idata = create_intersection_data(int_id, name, "simulation", "simulation")
+            idata["camera_status"] = "active"
+            intersection_registry[int_id] = idata
+
+    sim = sim_manager.create_simulation(int_id, name)
+    sim.update_config(data)
+    sim.start()
+
+    # Start feeding simulation data into the main system
+    sim_manager.start_feed_to_system(intersection_registry, data_lock, frame_lock)
+
+    return jsonify({"success": True, "message": f"Simulation started for {int_id}", "config": sim.get_config()})
+
+
+@app.route('/api/simulation/<int_id>', methods=['PUT'])
+def update_simulation(int_id):
+    """Update simulation configuration."""
+    sim = sim_manager.get_simulation(int_id)
+    if not sim:
+        return jsonify({"success": False, "error": "Simulation not found"}), 404
+
+    data = request.json or {}
+    sim.update_config(data)
+    return jsonify({"success": True, "config": sim.get_config()})
+
+
+@app.route('/api/simulation/<int_id>', methods=['DELETE'])
+def delete_simulation(int_id):
+    """Stop and remove a simulation."""
+    sim_manager.remove_simulation(int_id)
+    return jsonify({"success": True})
+
+
+@app.route('/api/simulation/<int_id>/spawn', methods=['POST'])
+def spawn_vehicle(int_id):
+    """Spawn a vehicle in the simulation."""
+    sim = sim_manager.get_simulation(int_id)
+    if not sim:
+        return jsonify({"success": False, "error": "Simulation not found"}), 404
+
+    data = request.json or {}
+    vid = sim.spawn_vehicle(
+        vehicle_type=data.get('type'),
+        direction=data.get('direction'),
+        speed=data.get('speed'),
+        lane=data.get('lane'),
+    )
+    return jsonify({"success": True, "vehicleId": vid})
+
+
+@app.route('/api/simulation/<int_id>/remove_vehicle', methods=['POST'])
+def remove_sim_vehicle(int_id):
+    """Remove a specific vehicle from the simulation."""
+    sim = sim_manager.get_simulation(int_id)
+    if not sim:
+        return jsonify({"success": False, "error": "Simulation not found"}), 404
+
+    data = request.json or {}
+    vid = data.get('vehicleId')
+    if vid:
+        sim.remove_vehicle(vid)
+    return jsonify({"success": True})
+
+
+@app.route('/api/simulation/<int_id>/clear', methods=['POST'])
+def clear_sim_vehicles(int_id):
+    """Remove all vehicles from simulation."""
+    sim = sim_manager.get_simulation(int_id)
+    if not sim:
+        return jsonify({"success": False, "error": "Simulation not found"}), 404
+
+    sim.clear_vehicles()
+    return jsonify({"success": True})
+
+
+@app.route('/api/simulation/<int_id>/status', methods=['GET'])
+def get_simulation_status(int_id):
+    """Get simulation status and vehicle list."""
+    sim = sim_manager.get_simulation(int_id)
+    if not sim:
+        return jsonify({"success": False, "error": "Simulation not found"}), 404
+
+    det = sim.get_detection_results()
+    config = sim.get_config()
+    return jsonify({**config, "detection": det})
+
+
 # ============= MAIN =============
 
 if __name__ == '__main__':
