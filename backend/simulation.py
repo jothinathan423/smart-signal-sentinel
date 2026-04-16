@@ -822,13 +822,21 @@ class SimulationManager:
                     if not sim.running:
                         continue
 
-                    # Sync signal from main system -> simulation
+                    # Sync signals between simulation and main system
                     with data_lock:
                         idata = intersection_registry.get(int_id)
-                        if idata and "signal" in idata:
-                            sig = idata.get("signal", "")
-                            if sig in ("red", "yellow", "green"):
-                                sim.set_signal(sig)
+                        if idata:
+                            auto_enabled = idata.get("auto_control", {}).get("enabled", False)
+                            if auto_enabled:
+                                # Auto mode: main system drives signals -> simulation
+                                sig = idata.get("signal", "")
+                                if sig in ("red", "yellow", "green"):
+                                    sim.set_signal(sig)
+                            else:
+                                # No auto mode: simulation drives signals -> main system
+                                sim_signal = sim.signals.get("north", "red")
+                                if sim_signal in ("red", "yellow", "green"):
+                                    idata["signal"] = sim_signal
 
                     det = sim.get_detection_results()
 
