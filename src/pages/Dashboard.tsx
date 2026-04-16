@@ -158,100 +158,93 @@ const Dashboard = () => {
                       'grid-cols-1 md:grid-cols-2 xl:grid-cols-3'
                     }`}>
                       {activeIntersections.map(intersection => (
-                        <Card key={intersection.id} className="overflow-hidden">
-                          <CardHeader className="pb-2">
-                            <div className="flex items-center justify-between">
-                              <CardTitle className="text-lg truncate">{intersection.name}</CardTitle>
-                              <div className="flex gap-1">
-                                {(["north", "south", "east", "west"] as const).map(dir => {
-                                  const sig = intersection.signals?.[dir] || intersection.status || "red";
-                                  return (
-                                    <Badge key={dir} variant="outline" className={`text-xs px-1.5 py-0.5 ${
+                        <div key={intersection.id} className="space-y-4">
+                          {/* Intersection header card */}
+                          <Card className="overflow-hidden">
+                            <CardHeader className="pb-2">
+                              <div className="flex items-center justify-between">
+                                <CardTitle className="text-lg truncate">{intersection.name}</CardTitle>
+                                <div className="flex items-center gap-2">
+                                  <Car className="h-4 w-4 text-primary" />
+                                  <span className="text-lg font-bold">{intersection.vehicleCount}</span>
+                                </div>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <div className="text-xs text-muted-foreground">ID: {intersection.id} | Last updated: {intersection.lastUpdated}</div>
+                                <div className="flex gap-1.5">
+                                  {(["red", "yellow", "green"] as const).map(sig => (
+                                    <Button
+                                      key={sig}
+                                      variant="outline"
+                                      size="sm"
+                                      className={intersection.status === sig ?
+                                        sig === "red" ? "bg-traffic-red/10 border-traffic-red/30 text-traffic-red" :
+                                        sig === "yellow" ? "bg-traffic-yellow/10 border-traffic-yellow/30 text-yellow-800" :
+                                        "bg-traffic-green/10 border-traffic-green/30 text-traffic-green"
+                                        : ""}
+                                      onClick={() => updateTrafficStatus(intersection.id, sig)}
+                                      disabled={intersection.autoMode}
+                                    >
+                                      {sig.charAt(0).toUpperCase() + sig.slice(1)}
+                                    </Button>
+                                  ))}
+                                </div>
+                              </div>
+                            </CardHeader>
+                            {intersection.emergency && (
+                              <CardContent className="pt-0 pb-3">
+                                <div className="flex items-center gap-3 p-3 rounded-lg bg-traffic-emergency/10 border border-traffic-emergency/20 animate-pulse">
+                                  <div className="bg-traffic-emergency text-white p-2 rounded-full">
+                                    <Siren className="w-5 h-5" />
+                                  </div>
+                                  <div className="flex-1">
+                                    <h4 className="font-medium text-traffic-emergency text-sm">Emergency Vehicle Detected</h4>
+                                    <p className="text-xs text-muted-foreground">Traffic signal priority activated</p>
+                                  </div>
+                                  <AlertTriangle className="w-5 h-5 text-traffic-emergency" />
+                                </div>
+                              </CardContent>
+                            )}
+                          </Card>
+
+                          {/* 4 separate direction signal cards */}
+                          <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+                            {(["north", "south", "east", "west"] as const).map(dir => {
+                              const sig = intersection.signals?.[dir] || "red";
+                              return (
+                                <Card key={dir} className={`overflow-hidden border-2 transition-all duration-300 ${
+                                  sig === "green" ? "border-traffic-green/40" :
+                                  sig === "yellow" ? "border-traffic-yellow/40" :
+                                  "border-traffic-red/40"
+                                }`}>
+                                  <CardContent className="p-4 flex flex-col items-center gap-3">
+                                    <div className="text-sm uppercase font-semibold tracking-wider text-muted-foreground">
+                                      {dir}
+                                    </div>
+                                    <div className="flex flex-col items-center gap-2 p-3 rounded-xl bg-muted/40">
+                                      <div className={`w-10 h-10 rounded-full transition-all duration-300 ${
+                                        sig === "red" ? "bg-traffic-red shadow-[0_0_12px_rgba(255,59,48,0.6)]" : "bg-traffic-red/20"
+                                      }`} />
+                                      <div className={`w-10 h-10 rounded-full transition-all duration-300 ${
+                                        sig === "yellow" ? "bg-traffic-yellow shadow-[0_0_12px_rgba(255,204,0,0.6)]" : "bg-traffic-yellow/20"
+                                      }`} />
+                                      <div className={`w-10 h-10 rounded-full transition-all duration-300 ${
+                                        sig === "green" ? "bg-traffic-green shadow-[0_0_12px_rgba(52,199,89,0.6)]" : "bg-traffic-green/20"
+                                      }`} />
+                                    </div>
+                                    <Badge variant="outline" className={`text-xs font-bold ${
                                       sig === "green" ? "bg-traffic-green/10 text-traffic-green border-traffic-green/30" :
                                       sig === "yellow" ? "bg-traffic-yellow/10 text-yellow-800 border-traffic-yellow/30" :
                                       "bg-traffic-red/10 text-traffic-red border-traffic-red/30"
                                     }`}>
-                                      {dir[0].toUpperCase()}
+                                      {sig === "red" ? "STOP" : sig === "yellow" ? "WAIT" : "GO"}
                                     </Badge>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                            <div className="text-xs text-muted-foreground">Last updated: {intersection.lastUpdated}</div>
-                          </CardHeader>
-                          <CardContent className="space-y-4">
-                            <div className="grid grid-cols-2 gap-4">
-                              <div className="p-3 rounded-lg bg-muted/30 space-y-2">
-                                <div className="text-xs uppercase tracking-wider font-medium text-muted-foreground">Traffic Signals</div>
-                                <div className="grid grid-cols-2 gap-2 mt-1">
-                                  {(["north", "south", "east", "west"] as const).map(dir => {
-                                    const sig = intersection.signals?.[dir] || "red";
-                                    return (
-                                      <div key={dir} className="flex flex-col items-center gap-1">
-                                        <span className="text-[10px] uppercase font-medium text-muted-foreground">{dir}</span>
-                                        <div className="flex gap-1">
-                                          <div className={`w-5 h-5 rounded-full ${sig === "red" ? "bg-traffic-red" : "bg-traffic-red/20"}`} />
-                                          <div className={`w-5 h-5 rounded-full ${sig === "yellow" ? "bg-traffic-yellow" : "bg-traffic-yellow/20"}`} />
-                                          <div className={`w-5 h-5 rounded-full ${sig === "green" ? "bg-traffic-green" : "bg-traffic-green/20"}`} />
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                              <div className="p-3 rounded-lg bg-muted/30 space-y-2">
-                                <div className="text-xs uppercase tracking-wider font-medium text-muted-foreground">Vehicle Count</div>
-                                <div className="flex items-center gap-2 mt-2">
-                                  <Car className="h-6 w-6 text-primary" />
-                                  <span className="text-3xl font-bold">{intersection.vehicleCount}</span>
-                                </div>
-                                {intersection.emergency && (
-                                  <div className="text-xs text-traffic-emergency font-medium mt-1 flex items-center gap-1">
-                                    <Siren className="h-3 w-3" />
-                                    Emergency Vehicle Detected
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-
-                            {/* Emergency alert */}
-                            {intersection.emergency && (
-                              <div className="flex items-center gap-3 p-3 rounded-lg bg-traffic-emergency/10 border border-traffic-emergency/20 animate-pulse">
-                                <div className="bg-traffic-emergency text-white p-2 rounded-full">
-                                  <Siren className="w-5 h-5" />
-                                </div>
-                                <div className="flex-1">
-                                  <h4 className="font-medium text-traffic-emergency text-sm">Emergency Vehicle Detected</h4>
-                                  <p className="text-xs text-muted-foreground">Traffic signal priority activated</p>
-                                </div>
-                                <AlertTriangle className="w-5 h-5 text-traffic-emergency" />
-                              </div>
-                            )}
-
-                            {/* Signal controls */}
-                            <div className="flex items-center justify-between">
-                              <div className="text-xs text-muted-foreground">ID: {intersection.id}</div>
-                              <div className="flex gap-1.5">
-                                {(["red", "yellow", "green"] as const).map(sig => (
-                                  <Button
-                                    key={sig}
-                                    variant="outline"
-                                    size="sm"
-                                    className={intersection.status === sig ?
-                                      sig === "red" ? "bg-traffic-red/10 border-traffic-red/30 text-traffic-red" :
-                                      sig === "yellow" ? "bg-traffic-yellow/10 border-traffic-yellow/30 text-yellow-800" :
-                                      "bg-traffic-green/10 border-traffic-green/30 text-traffic-green"
-                                      : ""}
-                                    onClick={() => updateTrafficStatus(intersection.id, sig)}
-                                    disabled={intersection.autoMode}
-                                  >
-                                    {sig.charAt(0).toUpperCase() + sig.slice(1)}
-                                  </Button>
-                                ))}
-                              </div>
-                            </div>
-                          </CardContent>
-                        </Card>
+                                  </CardContent>
+                                </Card>
+                              );
+                            })}
+                          </div>
+                        </div>
                       ))}
                     </div>
                   ) : (
