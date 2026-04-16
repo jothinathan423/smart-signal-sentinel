@@ -10,6 +10,8 @@ import {
   toggleAutoMode,
   fetchSystemOverview,
   SystemOverview,
+  fetchZones,
+  ZoneInfo,
 } from "@/lib/api";
 import { toast } from "sonner";
 
@@ -51,6 +53,7 @@ export const useTrafficData = () => {
   const [violations, setViolations] = useState<ViolationData[]>([]);
   const [loadingViolations, setLoadingViolations] = useState(false);
   const [systemOverview, setSystemOverview] = useState<SystemOverview | null>(null);
+  const [zones, setZones] = useState<ZoneInfo[]>([]);
 
   // Build camera URLs from intersection data - MJPEG streams are continuous,
   // so we only set the URL once per intersection (no timestamp cache-busting needed)
@@ -80,13 +83,18 @@ export const useTrafficData = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [data, overview] = await Promise.all([
+        const [data, overview, zonesData] = await Promise.all([
           fetchTrafficData(),
           fetchSystemOverview(),
+          fetchZones(),
         ]);
 
         if (overview) {
           setSystemOverview(overview);
+        }
+
+        if (zonesData) {
+          setZones(zonesData);
         }
 
         if (!data || data.length === 0) {
@@ -226,6 +234,7 @@ export const useTrafficData = () => {
 
   return {
     intersections,
+    zones,
     historyData,
     loading,
     error,

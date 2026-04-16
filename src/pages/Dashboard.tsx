@@ -1,5 +1,5 @@
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import Navigation from "@/components/Navigation";
 import Intersection from "@/components/Intersection";
 import TrafficGraph from "@/components/TrafficGraph";
@@ -8,7 +8,7 @@ import ViolationsList from "@/components/ViolationsList";
 import CongestionIndicator from "@/components/CongestionIndicator";
 import { useTrafficData } from "@/hooks/useTrafficData";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, AlertTriangle, FileWarning, Scan, Camera, ArrowLeftRight, Siren, Activity, Car } from "lucide-react";
+import { RefreshCw, AlertTriangle, FileWarning, Scan, Camera, ArrowLeftRight, Siren, Activity, Car, MapPin } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 const Dashboard = () => {
   const {
     intersections,
+    zones,
     historyData,
     loading,
     error,
@@ -42,6 +43,51 @@ const Dashboard = () => {
   const emergencyCount = emergencyIntersections.length;
   const totalEmergencyVehicles = activeIntersections.reduce((sum, int) => sum + (int.emergencyCount || 0), 0);
 
+  // Group intersections by zone
+  const groupedByZone = useMemo(() => {
+    const zoneGroups: { zoneId: string; zoneName: string; intersections: typeof activeIntersections }[] = [];
+    const assignedIds = new Set<string>();
+
+    // Group intersections that belong to zones
+    for (const zone of zones) {
+      const zoneIntersections = activeIntersections.filter(int =>
+        zone.intersection_ids.includes(int.id)
+      );
+      if (zoneIntersections.length > 0) {
+        zoneGroups.push({
+          zoneId: zone.id,
+          zoneName: zone.name,
+          intersections: zoneIntersections,
+        });
+        zoneIntersections.forEach(int => assignedIds.add(int.id));
+      }
+    }
+
+    // Also group by zoneId from intersection data (in case zones API doesn't have it)
+    const zoneIdMap = new Map<string, typeof activeIntersections>();
+    for (const int of activeIntersections) {
+      if (int.zoneId && !assignedIds.has(int.id)) {
+        if (!zoneIdMap.has(int.zoneId)) {
+          zoneIdMap.set(int.zoneId, []);
+        }
+        zoneIdMap.get(int.zoneId)!.push(int);
+        assignedIds.add(int.id);
+      }
+    }
+    for (const [zoneId, ints] of zoneIdMap) {
+      zoneGroups.push({
+        zoneId,
+        zoneName: zoneId,
+        intersections: ints,
+      });
+    }
+
+    // Unassigned intersections
+    const unassigned = activeIntersections.filter(int => !assignedIds.has(int.id));
+
+    return { zoneGroups, unassigned };
+  }, [activeIntersections, zones]);
+
   const handleCheckViolations = async (intersectionId: string) => {
     setCheckingViolations(true);
     try {
@@ -66,6 +112,124 @@ const Dashboard = () => {
 
   // Set default active intersection
   const currentActiveIntersection = activeIntersection || activeIntersections[0]?.id || "";
+
+  // Render a group of intersection cards in a grid
+  const renderIntersectionGrid = (ints: typeof activeIntersections) => (
+    <div className={`grid gap-4 ${
+      ints.length === 1 ? 'grid-cols-1' :
+      ints.length <= 2 ? 'grid-cols-1 md:grid-cols-2' :
+      'grid-cols-1 md:grid-cols-2 xl:grid-cols-3'
+    }`}>
+      {ints.map(intersection => (
+        <Card key={intersection.id} className="overflow-hidden">
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-lg truncate">{intersection.name}</CardTitle>
+              <Badge
+                variant="outline"
+                className={intersection.status === "green" ? "bg-traffic-green/10 text-traffic-green border-traffic-green/30" :
+                           intersection.status === "yellow" ? "bg-traffic-yellow/10 text-yellow-800 border-traffic-yellow/30" :
+                           "bg-traffic-red/10 text-traffic-red border-traffic-red/30"}
+              >
+                {intersection.status?.toUpperCase() || "UNKNOWN"}
+              </Badge>
+            </div>
+            <div className="text-xs text-muted-foreground">Last updated: {intersection.lastUpdated}</div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="p-3 rounded-lg bg-muted/30 space-y-2">
+                <div className="text-xs uppercase tracking-wider font-medium text-muted-foreground">Traffic Signal</div>
+                <div className="flex flex-col items-center gap-2">
+                  <div className={`w-12 h-12 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300
+                    ${intersection.status === "red" ? "bg-traffic-red text-white shadow-[0_0_12px_rgba(255,59,48,0.5)]" : "bg-traffic-red/20"}`}>
+                    {intersection.status === "red" && "STOP"}
+                  </div>
+                  <div className={`w-12 h-12 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300
+                    ${intersection.status === "yellow" ? "bg-traffic-yellow text-black shadow-[0_0_12px_rgba(255,204,0,0.5)]" : "bg-traffic-yellow/20"}`}>
+                    {intersection.status === "yellow" && "WAIT"}
+                  </div>
+                  <div className={`w-12 h-12 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300
+                    ${intersection.status === "green" ? "bg-traffic-green text-white shadow-[0_0_12px_rgba(52,199,89,0.5)]" : "bg-traffic-green/20"}`}>
+                    {intersection.status === "green" && "GO"}
+                  </div>
+                </div>
+              </div>
+              <div className="p-3 rounded-lg bg-muted/30 space-y-2">
+                <div className="text-xs uppercase tracking-wider font-medium text-muted-foreground">Vehicle Count</div>
+                <div className="flex items-center gap-2 mt-2">
+                  <Car className="h-6 w-6 text-primary" />
+                  <span className="text-3xl font-bold">{intersection.vehicleCount}</span>
+                </div>
+                {intersection.emergency && (
+                  <div className="text-xs text-traffic-emergency font-medium mt-1 flex items-center gap-1">
+                    <Siren className="h-3 w-3" />
+                    Emergency Vehicle Detected
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Directional signal badges */}
+            {intersection.signals && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-xs text-muted-foreground mr-1">Directions:</span>
+                {(["north", "south", "east", "west"] as const).map(dir => {
+                  const sig = intersection.signals[dir] || "red";
+                  return (
+                    <Badge key={dir} variant="outline" className={`text-[10px] px-1.5 py-0 font-medium border ${
+                      sig === "green" ? "border-green-500/50 bg-green-500/10 text-green-500" :
+                      sig === "yellow" ? "border-yellow-500/50 bg-yellow-500/10 text-yellow-500" :
+                      "border-red-500/50 bg-red-500/10 text-red-500"
+                    }`}>
+                      {dir[0].toUpperCase()}: {sig[0].toUpperCase()}
+                    </Badge>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Emergency alert */}
+            {intersection.emergency && (
+              <div className="flex items-center gap-3 p-3 rounded-lg bg-traffic-emergency/10 border border-traffic-emergency/20 animate-pulse">
+                <div className="bg-traffic-emergency text-white p-2 rounded-full">
+                  <Siren className="w-5 h-5" />
+                </div>
+                <div className="flex-1">
+                  <h4 className="font-medium text-traffic-emergency text-sm">Emergency Vehicle Detected</h4>
+                  <p className="text-xs text-muted-foreground">Traffic signal priority activated</p>
+                </div>
+                <AlertTriangle className="w-5 h-5 text-traffic-emergency" />
+              </div>
+            )}
+
+            {/* Signal controls */}
+            <div className="flex items-center justify-between">
+              <div className="text-xs text-muted-foreground">ID: {intersection.id}</div>
+              <div className="flex gap-1.5">
+                {(["red", "yellow", "green"] as const).map(sig => (
+                  <Button
+                    key={sig}
+                    variant="outline"
+                    size="sm"
+                    className={intersection.status === sig ?
+                      sig === "red" ? "bg-traffic-red/10 border-traffic-red/30 text-traffic-red" :
+                      sig === "yellow" ? "bg-traffic-yellow/10 border-traffic-yellow/30 text-yellow-800" :
+                      "bg-traffic-green/10 border-traffic-green/30 text-traffic-green"
+                      : ""}
+                    onClick={() => updateTrafficStatus(intersection.id, sig)}
+                    disabled={intersection.autoMode}
+                  >
+                    {sig.charAt(0).toUpperCase() + sig.slice(1)}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -151,101 +315,47 @@ const Dashboard = () => {
                 {/* Intersection Cards - Left 3 cols */}
                 <div className="lg:col-span-3">
                   {viewMode === "split" ? (
-                    <div className={`grid gap-6 ${
-                      activeIntersections.length === 1 ? 'grid-cols-1' :
-                      activeIntersections.length <= 2 ? 'grid-cols-1 md:grid-cols-2' :
-                      activeIntersections.length <= 3 ? 'grid-cols-1 md:grid-cols-3' :
-                      'grid-cols-1 md:grid-cols-2 xl:grid-cols-3'
-                    }`}>
-                      {activeIntersections.map(intersection => (
-                        <div key={intersection.id} className="space-y-4">
-                          {/* Intersection header card */}
-                          <Card className="overflow-hidden">
-                            <CardHeader className="pb-2">
-                              <div className="flex items-center justify-between">
-                                <CardTitle className="text-lg truncate">{intersection.name}</CardTitle>
-                                <div className="flex items-center gap-2">
-                                  <Car className="h-4 w-4 text-primary" />
-                                  <span className="text-lg font-bold">{intersection.vehicleCount}</span>
-                                </div>
-                              </div>
-                              <div className="flex items-center justify-between">
-                                <div className="text-xs text-muted-foreground">ID: {intersection.id} | Last updated: {intersection.lastUpdated}</div>
-                                <div className="flex gap-1.5">
-                                  {(["red", "yellow", "green"] as const).map(sig => (
-                                    <Button
-                                      key={sig}
-                                      variant="outline"
-                                      size="sm"
-                                      className={intersection.status === sig ?
-                                        sig === "red" ? "bg-traffic-red/10 border-traffic-red/30 text-traffic-red" :
-                                        sig === "yellow" ? "bg-traffic-yellow/10 border-traffic-yellow/30 text-yellow-800" :
-                                        "bg-traffic-green/10 border-traffic-green/30 text-traffic-green"
-                                        : ""}
-                                      onClick={() => updateTrafficStatus(intersection.id, sig)}
-                                      disabled={intersection.autoMode}
-                                    >
-                                      {sig.charAt(0).toUpperCase() + sig.slice(1)}
-                                    </Button>
-                                  ))}
-                                </div>
-                              </div>
-                            </CardHeader>
-                            {intersection.emergency && (
-                              <CardContent className="pt-0 pb-3">
-                                <div className="flex items-center gap-3 p-3 rounded-lg bg-traffic-emergency/10 border border-traffic-emergency/20 animate-pulse">
-                                  <div className="bg-traffic-emergency text-white p-2 rounded-full">
-                                    <Siren className="w-5 h-5" />
-                                  </div>
-                                  <div className="flex-1">
-                                    <h4 className="font-medium text-traffic-emergency text-sm">Emergency Vehicle Detected</h4>
-                                    <p className="text-xs text-muted-foreground">Traffic signal priority activated</p>
-                                  </div>
-                                  <AlertTriangle className="w-5 h-5 text-traffic-emergency" />
-                                </div>
-                              </CardContent>
-                            )}
-                          </Card>
-
-                          {/* 4 separate direction signal cards */}
-                          <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
-                            {(["north", "south", "east", "west"] as const).map(dir => {
-                              const sig = intersection.signals?.[dir] || "red";
-                              return (
-                                <Card key={dir} className={`overflow-hidden border-2 transition-all duration-300 ${
-                                  sig === "green" ? "border-traffic-green/40" :
-                                  sig === "yellow" ? "border-traffic-yellow/40" :
-                                  "border-traffic-red/40"
-                                }`}>
-                                  <CardContent className="p-4 flex flex-col items-center gap-3">
-                                    <div className="text-sm uppercase font-semibold tracking-wider text-muted-foreground">
-                                      {dir}
-                                    </div>
-                                    <div className="flex flex-col items-center gap-2 p-3 rounded-xl bg-muted/40">
-                                      <div className={`w-10 h-10 rounded-full transition-all duration-300 ${
-                                        sig === "red" ? "bg-traffic-red shadow-[0_0_12px_rgba(255,59,48,0.6)]" : "bg-traffic-red/20"
-                                      }`} />
-                                      <div className={`w-10 h-10 rounded-full transition-all duration-300 ${
-                                        sig === "yellow" ? "bg-traffic-yellow shadow-[0_0_12px_rgba(255,204,0,0.6)]" : "bg-traffic-yellow/20"
-                                      }`} />
-                                      <div className={`w-10 h-10 rounded-full transition-all duration-300 ${
-                                        sig === "green" ? "bg-traffic-green shadow-[0_0_12px_rgba(52,199,89,0.6)]" : "bg-traffic-green/20"
-                                      }`} />
-                                    </div>
-                                    <Badge variant="outline" className={`text-xs font-bold ${
-                                      sig === "green" ? "bg-traffic-green/10 text-traffic-green border-traffic-green/30" :
-                                      sig === "yellow" ? "bg-traffic-yellow/10 text-yellow-800 border-traffic-yellow/30" :
-                                      "bg-traffic-red/10 text-traffic-red border-traffic-red/30"
-                                    }`}>
-                                      {sig === "red" ? "STOP" : sig === "yellow" ? "WAIT" : "GO"}
-                                    </Badge>
-                                  </CardContent>
-                                </Card>
-                              );
-                            })}
+                    <div className="space-y-8">
+                      {/* Zone groups */}
+                      {groupedByZone.zoneGroups.map(group => (
+                        <div key={group.zoneId} className="space-y-4">
+                          <div className="flex items-center gap-3 pb-2 border-b">
+                            <div className="bg-primary/10 p-2 rounded-lg">
+                              <MapPin className="h-5 w-5 text-primary" />
+                            </div>
+                            <div>
+                              <h2 className="text-lg font-semibold">{group.zoneName}</h2>
+                              <p className="text-xs text-muted-foreground">
+                                {group.intersections.length} intersection{group.intersections.length !== 1 ? 's' : ''} | Zone ID: {group.zoneId}
+                              </p>
+                            </div>
+                            <Badge variant="outline" className="ml-auto">
+                              {group.intersections.reduce((sum, i) => sum + i.vehicleCount, 0)} vehicles
+                            </Badge>
                           </div>
+                          {renderIntersectionGrid(group.intersections)}
                         </div>
                       ))}
+
+                      {/* Unassigned intersections */}
+                      {groupedByZone.unassigned.length > 0 && (
+                        <div className="space-y-4">
+                          {groupedByZone.zoneGroups.length > 0 && (
+                            <div className="flex items-center gap-3 pb-2 border-b">
+                              <div className="bg-muted p-2 rounded-lg">
+                                <MapPin className="h-5 w-5 text-muted-foreground" />
+                              </div>
+                              <div>
+                                <h2 className="text-lg font-semibold">Unassigned</h2>
+                                <p className="text-xs text-muted-foreground">
+                                  {groupedByZone.unassigned.length} intersection{groupedByZone.unassigned.length !== 1 ? 's' : ''} not assigned to any zone
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                          {renderIntersectionGrid(groupedByZone.unassigned)}
+                        </div>
+                      )}
                     </div>
                   ) : (
                     /* Single View - tabs for each intersection */
@@ -301,6 +411,10 @@ const Dashboard = () => {
                       <div className="flex items-center justify-between py-1.5">
                         <span className="text-sm">Monitored Intersections</span>
                         <span className="font-bold">{systemOverview?.monitored_intersections || activeIntersections.length}</span>
+                      </div>
+                      <div className="flex items-center justify-between py-1.5">
+                        <span className="text-sm">Zones</span>
+                        <span className="font-bold">{systemOverview?.total_zones || zones.length}</span>
                       </div>
                       <div className="flex items-center justify-between py-1.5">
                         <span className="text-sm">Emergency Vehicles</span>
