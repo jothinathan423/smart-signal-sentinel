@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Play, Square, Plus, Trash2, Car, Truck, Bus, Bike,
-  Siren, RefreshCw, Gauge, Users
+  Siren, RefreshCw, Gauge, Users, AlertTriangle, ShieldAlert
 } from "lucide-react";
 import {
   fetchSimulations, createSimulation, updateSimulation, deleteSimulation,
@@ -259,14 +259,21 @@ const Simulation = () => {
                       <CardTitle className="text-lg">
                         Live View: {currentSim?.name || selectedSim}
                       </CardTitle>
-                      {simStatus?.signal && (
-                        <Badge className={
-                          simStatus.signal === "green" ? "bg-green-500" :
-                          simStatus.signal === "yellow" ? "bg-yellow-500 text-black" :
-                          "bg-red-500"
-                        }>
-                          Signal: {simStatus.signal.toUpperCase()}
-                        </Badge>
+                      {simStatus?.signals && (
+                        <div className="flex items-center gap-2">
+                          {(["north", "south", "east", "west"] as const).map(dir => {
+                            const sig = simStatus.signals[dir] || "red";
+                            return (
+                              <Badge key={dir} variant="outline" className={`text-xs font-medium border-2 ${
+                                sig === "green" ? "border-green-500 bg-green-500/20 text-green-400" :
+                                sig === "yellow" ? "border-yellow-500 bg-yellow-500/20 text-yellow-400" :
+                                "border-red-500 bg-red-500/20 text-red-400"
+                              }`}>
+                                {dir[0].toUpperCase()}: {sig.toUpperCase()}
+                              </Badge>
+                            );
+                          })}
+                        </div>
                       )}
                     </div>
                   </CardHeader>
@@ -280,7 +287,7 @@ const Simulation = () => {
 
                 {/* Stats */}
                 {detection && (
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                     <Card>
                       <CardContent className="p-4 text-center">
                         <div className="text-2xl font-bold">{detection.vehicle_count}</div>
@@ -303,6 +310,15 @@ const Simulation = () => {
                       <CardContent className="p-4 text-center">
                         <div className="text-2xl font-bold text-red-500">{detection.emergency_count}</div>
                         <div className="text-xs text-muted-foreground">Emergency</div>
+                      </CardContent>
+                    </Card>
+                    <Card className={simStatus?.violation_count > 0 ? "border-red-500/50" : ""}>
+                      <CardContent className="p-4 text-center">
+                        <div className="text-2xl font-bold text-orange-500">
+                          <AlertTriangle className="h-4 w-4 inline mr-1" />
+                          {simStatus?.violation_count || 0}
+                        </div>
+                        <div className="text-xs text-muted-foreground">Violations</div>
                       </CardContent>
                     </Card>
                   </div>
@@ -363,6 +379,7 @@ const Simulation = () => {
                   <TabsContent value="quick">
                     <Card>
                       <CardContent className="p-4 space-y-3">
+                        <Label className="text-sm font-medium block">General</Label>
                         <div className="grid grid-cols-2 gap-3">
                           <Button onClick={() => handleSpawnMultiple(5)} variant="outline">
                             <Car className="h-4 w-4 mr-2" /> +5 Random Vehicles
@@ -378,12 +395,34 @@ const Simulation = () => {
                             variant="outline">
                             <Truck className="h-4 w-4 mr-2" /> Spawn Slow Truck
                           </Button>
+                        </div>
+
+                        <Label className="text-sm font-medium block pt-2 border-t">
+                          <ShieldAlert className="h-4 w-4 inline mr-1 text-red-500" />
+                          Violation Test Scenarios
+                        </Label>
+                        <div className="grid grid-cols-2 gap-3">
                           <Button onClick={() => spawnSimVehicle(selectedSim, { type: "car", speed: 80 })}
-                            variant="outline" className="border-red-300">
-                            <Gauge className="h-4 w-4 mr-2 text-red-500" /> Spawn Speeding Car
+                            variant="outline" className="border-orange-400 text-orange-600 hover:bg-orange-50">
+                            <Gauge className="h-4 w-4 mr-2" /> Speeding Car (80 km/h)
                           </Button>
-                          <Button onClick={handleClear} variant="destructive">
-                            <Trash2 className="h-4 w-4 mr-2" /> Clear All
+                          <Button onClick={() => spawnSimVehicle(selectedSim, { type: "car", is_violator: true })}
+                            variant="outline" className="border-red-400 text-red-600 hover:bg-red-50">
+                            <AlertTriangle className="h-4 w-4 mr-2" /> Red Light Runner
+                          </Button>
+                          <Button onClick={() => spawnSimVehicle(selectedSim, { type: "motorcycle", helmet_violation: true })}
+                            variant="outline" className="border-red-400 text-red-600 hover:bg-red-50">
+                            <Bike className="h-4 w-4 mr-2" /> No-Helmet Rider
+                          </Button>
+                          <Button onClick={() => spawnSimVehicle(selectedSim, { type: "motorcycle", speed: 75, helmet_violation: true, is_violator: true })}
+                            variant="outline" className="border-red-500 text-red-700 hover:bg-red-50 font-semibold">
+                            <ShieldAlert className="h-4 w-4 mr-2" /> Multi-Violator
+                          </Button>
+                        </div>
+
+                        <div className="pt-2 border-t">
+                          <Button onClick={handleClear} variant="destructive" className="w-full">
+                            <Trash2 className="h-4 w-4 mr-2" /> Clear All Vehicles
                           </Button>
                         </div>
 

@@ -2373,6 +2373,8 @@ def spawn_vehicle(int_id):
         direction=data.get('direction'),
         speed=data.get('speed'),
         lane=data.get('lane'),
+        is_violator=data.get('is_violator'),
+        helmet_violation=data.get('helmet_violation'),
     )
     return jsonify({"success": True, "vehicleId": vid})
 

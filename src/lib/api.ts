@@ -514,6 +514,7 @@ export interface SimulationConfig {
   default_speed: number;
   speed_variance: number;
   signal: string;
+  signals: Record<string, string>;
   vehicle_count: number;
   total_spawned: number;
   total_passed: number;
@@ -588,7 +589,7 @@ export const deleteSimulation = async (intersectionId: string): Promise<boolean>
 
 export const spawnSimVehicle = async (
   intersectionId: string,
-  options: { type?: string; direction?: string; speed?: number; lane?: number }
+  options: { type?: string; direction?: string; speed?: number; lane?: number; is_violator?: boolean; helmet_violation?: boolean }
 ): Promise<string | null> => {
   try {
     const response = await fetch(`${API_BASE_URL}/api/simulation/${intersectionId}/spawn`, {
