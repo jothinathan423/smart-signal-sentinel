@@ -162,34 +162,41 @@ const Dashboard = () => {
                           <CardHeader className="pb-2">
                             <div className="flex items-center justify-between">
                               <CardTitle className="text-lg truncate">{intersection.name}</CardTitle>
-                              <Badge
-                                variant="outline"
-                                className={intersection.status === "green" ? "bg-traffic-green/10 text-traffic-green border-traffic-green/30" :
-                                           intersection.status === "yellow" ? "bg-traffic-yellow/10 text-yellow-800 border-traffic-yellow/30" :
-                                           "bg-traffic-red/10 text-traffic-red border-traffic-red/30"}
-                              >
-                                {intersection.status?.toUpperCase() || "UNKNOWN"}
-                              </Badge>
+                              <div className="flex gap-1">
+                                {(["north", "south", "east", "west"] as const).map(dir => {
+                                  const sig = intersection.signals?.[dir] || intersection.status || "red";
+                                  return (
+                                    <Badge key={dir} variant="outline" className={`text-xs px-1.5 py-0.5 ${
+                                      sig === "green" ? "bg-traffic-green/10 text-traffic-green border-traffic-green/30" :
+                                      sig === "yellow" ? "bg-traffic-yellow/10 text-yellow-800 border-traffic-yellow/30" :
+                                      "bg-traffic-red/10 text-traffic-red border-traffic-red/30"
+                                    }`}>
+                                      {dir[0].toUpperCase()}
+                                    </Badge>
+                                  );
+                                })}
+                              </div>
                             </div>
                             <div className="text-xs text-muted-foreground">Last updated: {intersection.lastUpdated}</div>
                           </CardHeader>
                           <CardContent className="space-y-4">
                             <div className="grid grid-cols-2 gap-4">
                               <div className="p-3 rounded-lg bg-muted/30 space-y-2">
-                                <div className="text-xs uppercase tracking-wider font-medium text-muted-foreground">Traffic Signal</div>
-                                <div className="flex flex-col items-center gap-2">
-                                  <div className={`w-12 h-12 rounded-full flex items-center justify-center text-xs font-bold
-                                    ${intersection.status === "red" ? "bg-traffic-red text-white" : "bg-traffic-red/20"}`}>
-                                    {intersection.status === "red" && "STOP"}
-                                  </div>
-                                  <div className={`w-12 h-12 rounded-full flex items-center justify-center text-xs font-bold
-                                    ${intersection.status === "yellow" ? "bg-traffic-yellow text-black" : "bg-traffic-yellow/20"}`}>
-                                    {intersection.status === "yellow" && "WAIT"}
-                                  </div>
-                                  <div className={`w-12 h-12 rounded-full flex items-center justify-center text-xs font-bold
-                                    ${intersection.status === "green" ? "bg-traffic-green text-white" : "bg-traffic-green/20"}`}>
-                                    {intersection.status === "green" && "GO"}
-                                  </div>
+                                <div className="text-xs uppercase tracking-wider font-medium text-muted-foreground">Traffic Signals</div>
+                                <div className="grid grid-cols-2 gap-2 mt-1">
+                                  {(["north", "south", "east", "west"] as const).map(dir => {
+                                    const sig = intersection.signals?.[dir] || "red";
+                                    return (
+                                      <div key={dir} className="flex flex-col items-center gap-1">
+                                        <span className="text-[10px] uppercase font-medium text-muted-foreground">{dir}</span>
+                                        <div className="flex gap-1">
+                                          <div className={`w-5 h-5 rounded-full ${sig === "red" ? "bg-traffic-red" : "bg-traffic-red/20"}`} />
+                                          <div className={`w-5 h-5 rounded-full ${sig === "yellow" ? "bg-traffic-yellow" : "bg-traffic-yellow/20"}`} />
+                                          <div className={`w-5 h-5 rounded-full ${sig === "green" ? "bg-traffic-green" : "bg-traffic-green/20"}`} />
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
                                 </div>
                               </div>
                               <div className="p-3 rounded-lg bg-muted/30 space-y-2">

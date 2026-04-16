@@ -14,11 +14,19 @@ import {
 import { toast } from "sonner";
 
 // Define the intersection data structure
+export interface DirectionalSignals {
+  north: "red" | "yellow" | "green";
+  south: "red" | "yellow" | "green";
+  east: "red" | "yellow" | "green";
+  west: "red" | "yellow" | "green";
+}
+
 export interface Intersection {
   id: string;
   name: string;
   vehicleCount: number;
   status: "red" | "yellow" | "green";
+  signals: DirectionalSignals;
   emergency: boolean;
   emergencyCount: number;
   lastUpdated: string;
@@ -87,19 +95,28 @@ export const useTrafficData = () => {
         }
 
         // Map API data to intersection objects - fully dynamic
-        const updatedIntersections = data.map(item => ({
-          id: item.intersectionId,
-          name: item.name || item.intersectionId,
-          vehicleCount: item.vehicleCount,
-          status: item.status || "red" as const,
-          emergency: item.hasEmergencyVehicle,
-          emergencyCount: item.emergencyCount || 0,
-          lastUpdated: item.timestamp ? new Date(item.timestamp).toLocaleTimeString() : 'N/A',
-          autoMode: item.autoMode || false,
-          cameraStatus: item.cameraStatus,
-          pceDensity: item.pceDensity || 0,
-          zoneId: item.zoneId,
-        }));
+        const updatedIntersections = data.map(item => {
+          const status = item.status || "red" as const;
+          const defaultSignals: DirectionalSignals = {
+            north: status, south: status,
+            east: status === "green" ? "red" : status === "red" ? "green" : "yellow",
+            west: status === "green" ? "red" : status === "red" ? "green" : "yellow",
+          };
+          return {
+            id: item.intersectionId,
+            name: item.name || item.intersectionId,
+            vehicleCount: item.vehicleCount,
+            status,
+            signals: (item as any).signals || defaultSignals,
+            emergency: item.hasEmergencyVehicle,
+            emergencyCount: item.emergencyCount || 0,
+            lastUpdated: item.timestamp ? new Date(item.timestamp).toLocaleTimeString() : 'N/A',
+            autoMode: item.autoMode || false,
+            cameraStatus: item.cameraStatus,
+            pceDensity: item.pceDensity || 0,
+            zoneId: item.zoneId,
+          };
+        });
 
         setIntersections(updatedIntersections);
         updateCameraUrls(data);

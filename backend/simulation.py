@@ -834,9 +834,8 @@ class SimulationManager:
                                     sim.set_signal(sig)
                             else:
                                 # No auto mode: simulation drives signals -> main system
-                                sim_signal = sim.signals.get("north", "red")
-                                if sim_signal in ("red", "yellow", "green"):
-                                    idata["signal"] = sim_signal
+                                idata["signal"] = sim.signals.get("north", "red")
+                                idata["signals"] = dict(sim.signals)
 
                     det = sim.get_detection_results()
 

@@ -553,6 +553,7 @@ def create_intersection_data(intersection_id, name, camera_source="0", camera_ty
 
         # Signal
         "signal": "red",
+        "signals": {"north": "red", "south": "red", "east": "green", "west": "green"},
         "signal_controller": {
             "type": "mock",  # 'http', 'mqtt', 'gpio', 'mock'
             "endpoint": "",
@@ -1076,6 +1077,14 @@ def update_signal_automatic(int_id):
         old_signal = idata["signal"]
         idata["signal"] = new_signal
         idata["auto_control"]["last_change_time"] = current_time
+
+        # Keep directional signals in sync
+        if new_signal == "green":
+            idata["signals"] = {"north": "green", "south": "green", "east": "red", "west": "red"}
+        elif new_signal == "yellow":
+            idata["signals"] = {"north": "yellow", "south": "yellow", "east": "yellow", "west": "yellow"}
+        else:
+            idata["signals"] = {"north": "red", "south": "red", "east": "green", "west": "green"}
 
         # Log signal change and send to physical controller
         log_signal_change(int_id, old_signal, new_signal, "auto_pce_based")
@@ -1661,6 +1670,7 @@ def get_traffic_data():
                 "emergencyCount": idata.get("emergency_count", 0),
                 "timestamp": idata["timestamp"],
                 "status": idata["signal"],
+                "signals": idata.get("signals", {"north": idata["signal"], "south": idata["signal"], "east": "red", "west": "red"}),
                 "autoMode": idata["auto_control"]["enabled"],
                 "cameraStatus": idata["camera_status"],
                 "zoneId": idata.get("zone_id"),
@@ -1689,8 +1699,14 @@ def update_signal():
 
         old_signal = idata["signal"]
         idata["signal"] = status
+        # Keep directional signals in sync
         if status == "green":
+            idata["signals"] = {"north": "green", "south": "green", "east": "red", "west": "red"}
             idata["vehicles_crossed_stop_line"].clear()
+        elif status == "yellow":
+            idata["signals"] = {"north": "yellow", "south": "yellow", "east": "yellow", "west": "yellow"}
+        else:
+            idata["signals"] = {"north": "red", "south": "red", "east": "green", "west": "green"}
 
     # Log and send to physical signal controller
     log_signal_change(int_id, old_signal, status, "manual")
